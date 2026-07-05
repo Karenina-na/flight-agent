@@ -19,12 +19,10 @@ model = ChatOpenAI(
 #     model_kwargs={"base_url": "http://127.0.0.1:1234/v1", "api_key": "not-needed"}
 # )
 
-tools = get_tools()
-
 agent = create_agent(
     model=model,
-    system_prompt=build_system_prompt(tools=tools),
-    tools=tools,
+    system_prompt=build_system_prompt(tools=get_tools()),
+    tools=get_tools(),
     context_schema=Context,
     checkpointer=checkpointer
 )
