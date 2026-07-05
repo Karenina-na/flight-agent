@@ -8,6 +8,7 @@ and a registry-based tool loading system.
 
 - `main.py` - local demo entrypoint.
 - `src/agent.py` - builds the LangChain agent.
+- `src/config/` - loads YAML configuration.
 - `src/runtime.py` - defines runtime context passed into tools.
 - `src/memory.py` - configures the in-memory LangGraph checkpointer.
 - `src/prompt/` - builds system prompts from independent layers.
@@ -58,14 +59,23 @@ python -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```
 
-The agent currently points to a local OpenAI-compatible model endpoint:
+## Configuration
+
+Configuration is YAML-only. Start from the committed example file:
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+`config.yaml` is ignored by Git so local model endpoints and API keys do not get
+committed. The agent reads `config.yaml` at startup and falls back to
+`config.example.yaml` when no local config exists.
+
+The default example points to a local OpenAI-compatible model endpoint:
 
 ```text
 http://127.0.0.1:1234/v1
 ```
-
-You can override the default model settings in `.env` and wire them into
-`src/agent.py` later if needed.
 
 ## Run
 

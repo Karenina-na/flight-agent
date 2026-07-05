@@ -1,0 +1,9 @@
+llm:
+  provider: openai_compatible
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: "not-needed"
+  model: "google/gemma-4-e2b"
+  temperature: 0.3
+
+agent:
+  default_thread_id: "1"

@@ -12,5 +12,5 @@ build/
 *.egg-info/
 .env
 .env.*
-!.env.example
+config.yaml
 .DS_Store
