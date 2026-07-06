@@ -115,7 +115,13 @@ def test_skill_tools_log_lifecycle_without_skill_content(
     capsys,
 ):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     _write_skill(tmp_path)
     middleware = SkillMiddleware(skills_root=tmp_path)
@@ -151,7 +157,13 @@ def test_skill_tools_log_lifecycle_without_skill_content(
 
 def test_skill_tools_log_rejected_file_reads(tmp_path: Path, capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     _write_skill(tmp_path)
     middleware = SkillMiddleware(skills_root=tmp_path)
@@ -174,7 +186,13 @@ def test_skill_tools_log_rejected_file_reads(tmp_path: Path, capsys):
 
 def test_skill_tools_log_missing_skill_lookup(tmp_path: Path, capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     middleware = SkillMiddleware(skills_root=tmp_path)
     tools = {tool.name: tool for tool in middleware.tools}

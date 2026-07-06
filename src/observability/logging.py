@@ -56,10 +56,11 @@ def configure_logging(settings: LoggingSettings) -> logging.Logger:
     level = getattr(logging, settings.level)
     formatter = JsonFormatter() if settings.format == "json" else TextFormatter()
 
-    stream_handler = logging.StreamHandler(sys.stderr)
-    stream_handler.setLevel(level)
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
+    if settings.console:
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setLevel(level)
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
 
     if settings.output_path:
         log_path = Path(settings.output_path)

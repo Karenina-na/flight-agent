@@ -49,6 +49,7 @@ class LoggingSettings:
     format: LoggingFormat
     redact: bool
     output_path: str = "logs/skypilot.log"
+    console: bool = False
 
 
 @dataclass(frozen=True)

@@ -79,7 +79,13 @@ def test_memory_tools_write_and_read_langgraph_store():
 
 def test_memory_tools_log_write_and_read_without_memory_value(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     store = InMemoryStore()
     runtime = _runtime(store)
@@ -125,7 +131,13 @@ def test_memory_tools_handle_disabled_store():
 
 def test_memory_tools_log_disabled_store_operations(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     runtime = _runtime(None)
     middleware = MemoryMiddleware()

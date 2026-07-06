@@ -23,6 +23,7 @@ observability:
     format: "text"
     redact: true
     output_path: "logs/skypilot.log"
+    console: false
 
 summarization:
   enabled: true

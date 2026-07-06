@@ -8,7 +8,13 @@ from src.runtime import Context
 
 def test_observe_agent_run_logs_start_and_end(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     context = Context(
         user_id="u1",
@@ -37,7 +43,13 @@ def test_observe_agent_run_logs_start_and_end(capsys):
 
 def test_observe_agent_run_logs_error_and_reraises(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     context = Context(user_id="u1", request_id="request-1", run_id="run-1")
 
@@ -58,7 +70,13 @@ def test_observe_agent_run_logs_error_and_reraises(capsys):
 
 def test_observe_agent_stream_yields_items_and_logs_run(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     context = Context(user_id="u1", request_id="request-1", run_id="run-1")
 

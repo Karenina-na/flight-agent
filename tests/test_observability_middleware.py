@@ -77,7 +77,13 @@ def test_observability_middleware_does_not_expose_tools():
 
 def test_observability_middleware_logs_successful_model_call(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     middleware = ObservabilityMiddleware()
 
@@ -96,7 +102,13 @@ def test_observability_middleware_logs_successful_model_call(capsys):
 
 def test_observability_middleware_logs_error_and_reraises(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     middleware = ObservabilityMiddleware()
 
@@ -115,7 +127,13 @@ def test_observability_middleware_logs_error_and_reraises(capsys):
 
 def test_observability_middleware_logs_successful_tool_call(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     middleware = ObservabilityMiddleware()
 
@@ -141,7 +159,13 @@ def test_observability_middleware_logs_successful_tool_call(capsys):
 
 def test_observability_middleware_logs_tool_error_and_reraises(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
     )
     middleware = ObservabilityMiddleware()
 

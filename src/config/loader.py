@@ -77,6 +77,7 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
                     "output_path",
                     "logs/skypilot.log",
                 ),
+                console=_get_bool_with_default(logging_config, "console", False),
             ),
         ),
         summarization=SummarizationSettings(

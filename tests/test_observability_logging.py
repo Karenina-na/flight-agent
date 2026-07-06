@@ -15,6 +15,7 @@ def test_text_logging_includes_event_and_context_ids(capsys):
             format="text",
             redact=True,
             output_path="",
+            console=True,
         )
     )
     context = Context(
@@ -44,6 +45,7 @@ def test_json_logging_outputs_parseable_json(capsys):
             format="json",
             redact=True,
             output_path="",
+            console=True,
         )
     )
 
@@ -80,6 +82,7 @@ def test_disabled_logging_suppresses_events(capsys):
             format="text",
             redact=True,
             output_path="",
+            console=True,
         )
     )
 
@@ -98,6 +101,7 @@ def test_logging_writes_to_configured_file(tmp_path):
             format="text",
             redact=True,
             output_path=str(log_path),
+            console=False,
         )
     )
 
@@ -108,3 +112,22 @@ def test_logging_writes_to_configured_file(tmp_path):
     assert "INFO event=model_call_start" in log_text
     assert "user_id=u1" in log_text
     assert "message_count=2" in log_text
+
+
+def test_logging_does_not_write_to_console_by_default(capsys, tmp_path):
+    log_path = tmp_path / "logs" / "skypilot.log"
+    configure_logging(
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            output_path=str(log_path),
+        )
+    )
+
+    log_event("model_call_start", context=Context(user_id="u1"))
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "INFO event=model_call_start" in log_path.read_text(encoding="utf-8")
