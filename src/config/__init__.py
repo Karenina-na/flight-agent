@@ -4,7 +4,9 @@ from src.config.loader import load_settings
 from src.config.schema import (
     AgentSettings,
     LLMSettings,
+    MemoryCheckpointerSettings,
     MemorySettings,
+    MemoryStoreSettings,
     Settings,
     SummarizationSettings,
     WindowClauseSettings,
@@ -13,7 +15,9 @@ from src.config.schema import (
 __all__ = [
     "AgentSettings",
     "LLMSettings",
+    "MemoryCheckpointerSettings",
     "MemorySettings",
+    "MemoryStoreSettings",
     "Settings",
     "SummarizationSettings",
     "WindowClauseSettings",

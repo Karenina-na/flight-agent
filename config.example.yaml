@@ -10,7 +10,11 @@ agent:
   default_thread_id: "1"
 
 memory:
-  type: "in_memory"
+  checkpointer:
+    type: "in_memory"
+  store:
+    enabled: true
+    type: "in_memory"
 
 summarization:
   enabled: true

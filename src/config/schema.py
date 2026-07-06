@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 from typing import Literal
 
-MemoryType = Literal["in_memory"]
+MemoryCheckpointerType = Literal["in_memory"]
+MemoryStoreType = Literal["in_memory"]
 WindowClauseType = Literal["fraction", "tokens", "messages"]
 
 
@@ -23,8 +24,20 @@ class AgentSettings:
 
 
 @dataclass(frozen=True)
+class MemoryCheckpointerSettings:
+    type: MemoryCheckpointerType
+
+
+@dataclass(frozen=True)
+class MemoryStoreSettings:
+    enabled: bool
+    type: MemoryStoreType
+
+
+@dataclass(frozen=True)
 class MemorySettings:
-    type: MemoryType
+    checkpointer: MemoryCheckpointerSettings
+    store: MemoryStoreSettings
 
 
 @dataclass(frozen=True)

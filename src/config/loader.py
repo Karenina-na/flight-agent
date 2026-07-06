@@ -8,7 +8,9 @@ import yaml
 from src.config.schema import (
     AgentSettings,
     LLMSettings,
+    MemoryCheckpointerSettings,
     MemorySettings,
+    MemoryStoreSettings,
     Settings,
     SummarizationSettings,
     WindowClauseSettings,
@@ -31,6 +33,8 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
     llm_config = _require_mapping(raw_config, "llm")
     agent_config = _require_mapping(raw_config, "agent")
     memory_config = _require_mapping(raw_config, "memory")
+    checkpointer_config = _require_mapping(memory_config, "checkpointer")
+    store_config = _require_mapping(memory_config, "store")
     summarization_config = _require_mapping(raw_config, "summarization")
 
     return Settings(
@@ -46,7 +50,13 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
             default_thread_id=_get_str(agent_config, "default_thread_id"),
         ),
         memory=MemorySettings(
-            type=_get_memory_type(memory_config, "type"),
+            checkpointer=MemoryCheckpointerSettings(
+                type=_get_memory_checkpointer_type(checkpointer_config, "type"),
+            ),
+            store=MemoryStoreSettings(
+                enabled=_get_bool(store_config, "enabled"),
+                type=_get_memory_store_type(store_config, "type"),
+            ),
         ),
         summarization=SummarizationSettings(
             enabled=_get_bool(summarization_config, "enabled"),
@@ -136,11 +146,20 @@ def _get_bool(config: dict[str, Any], key: str) -> bool:
     raise ValueError(f"Config value '{key}' must be a bool")
 
 
-def _get_memory_type(config: dict[str, Any], key: str) -> str:
-    memory_type = _get_str(config, key)
-    if memory_type != "in_memory":
-        raise ValueError("Config value 'memory.type' must be: in_memory")
-    return memory_type
+def _get_memory_checkpointer_type(config: dict[str, Any], key: str) -> str:
+    checkpointer_type = _get_str(config, key)
+    if checkpointer_type != "in_memory":
+        raise ValueError(
+            "Config value 'memory.checkpointer.type' must be: in_memory"
+        )
+    return checkpointer_type
+
+
+def _get_memory_store_type(config: dict[str, Any], key: str) -> str:
+    store_type = _get_str(config, key)
+    if store_type != "in_memory":
+        raise ValueError("Config value 'memory.store.type' must be: in_memory")
+    return store_type
 
 
 def _get_window_clause(config: dict[str, Any], key: str) -> WindowClauseSettings:

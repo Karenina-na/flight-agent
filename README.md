@@ -10,7 +10,7 @@ skill middleware, and a registry-based tool loading system.
 - `src/agent.py` - builds the LangChain agent.
 - `src/config/` - loads YAML configuration.
 - `src/runtime.py` - defines runtime context passed into tools.
-- `src/memory/` - builds the configured LangGraph checkpointer.
+- `src/memory/` - builds LangGraph checkpointers, stores, and memory middleware.
 - `src/prompt/` - builds system prompts from independent layers.
 - `src/tools/` - registry-based tool package.
 
@@ -84,12 +84,25 @@ Conversation memory is configured through the `memory` section:
 
 ```yaml
 memory:
-  type: "in_memory"
+  checkpointer:
+    type: "in_memory"
+  store:
+    enabled: true
+    type: "in_memory"
 ```
 
-`in_memory` uses LangGraph's `InMemorySaver`, which is appropriate for local
-demos and tests. The factory boundary in `src/memory/` keeps the agent wiring
-ready for persistent checkpointers later.
+The checkpointer stores same-thread graph state, including message history.
+The store is LangGraph's long-term memory surface for cross-thread or
+user-scoped data. The in-memory implementations are appropriate for local demos
+and tests.
+
+`src/memory/` also provides middleware-private demo memory tools:
+
+- `remember_user_fact` - writes a stable user fact to the configured store.
+- `recall_user_facts` - reads remembered facts for the runtime user.
+
+These tools are attached through memory middleware and are not registered in the
+global business tool registry.
 
 ### Summarization
 
