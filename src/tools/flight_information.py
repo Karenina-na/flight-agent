@@ -14,7 +14,7 @@ def query_flight_information(
     include_price_relay: bool = True,
     currency: str = "cny",
 ) -> str:
-    """Query flight information facts with optional route price references."""
+    """Query flight information facts for a flight number with optional route price references. Use when the user asks about a specific flight number."""
     response = query_flight(
         flight_number=flight_number,
         date=date,

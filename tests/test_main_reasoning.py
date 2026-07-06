@@ -1,4 +1,4 @@
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from main import (
     DEMO_MESSAGE,
@@ -7,6 +7,7 @@ from main import (
     format_tools,
     handle_command,
     _has_reasoning_block,
+    _is_assistant_chunk,
     _message_text,
     _reasoning_text,
 )
@@ -101,3 +102,14 @@ def test_reasoning_block_can_exist_without_exposed_text():
     assert _has_reasoning_block(chunk)
     assert _reasoning_text(chunk) == ""
     assert _message_text(chunk) == "demo 可以验证流式输出。"
+
+
+def test_cli_filters_tool_messages_from_rendered_answer():
+    assert _is_assistant_chunk(AIMessageChunk(content="给用户看的回复"))
+    assert not _is_assistant_chunk(
+        ToolMessage(
+            content='{"timezone":"Asia/Shanghai"}',
+            name="query_current_date",
+            tool_call_id="call-1",
+        )
+    )

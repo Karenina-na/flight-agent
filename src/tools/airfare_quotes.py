@@ -20,7 +20,7 @@ def search_airfare_quotes(
     currency: str = "cny",
     limit: int = 20,
 ) -> str:
-    """Search airfare quote facts without judging price reasonableness."""
+    """Search airfare quote facts for a route and date without judging price reasonableness. Use after origin, destination, and departure_date are explicit or have been resolved."""
     response = search_quotes(
         origin=origin,
         destination=destination,

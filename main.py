@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from langchain.messages import HumanMessage
+from langchain_core.messages import AIMessageChunk
 
 from src.agent import agent
 from src.observability import observe_agent_stream
@@ -122,6 +123,9 @@ def stream_agent_response(message: str, session: CliSession) -> None:
         entrypoint="main.stream_agent_response",
         stream_mode="messages",
     ):
+        if not _is_assistant_chunk(message_chunk):
+            continue
+
         saw_reasoning_block = saw_reasoning_block or _has_reasoning_block(
             message_chunk
         )
@@ -158,6 +162,11 @@ def format_tools() -> str:
         description = str(getattr(tool, "description", "")).strip()
         lines.append(f"- {tool.name}: {description}")
     return "\n".join(lines)
+
+
+def _is_assistant_chunk(message_chunk: object) -> bool:
+    """Return True for assistant message chunks that are safe to print."""
+    return isinstance(message_chunk, AIMessageChunk)
 
 
 def _message_text(message_chunk: object) -> str:
