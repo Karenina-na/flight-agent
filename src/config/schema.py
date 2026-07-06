@@ -5,6 +5,7 @@ from typing import Literal
 
 MemoryCheckpointerType = Literal["in_memory"]
 MemoryStoreType = Literal["in_memory"]
+LoggingFormat = Literal["text", "json"]
 WindowClauseType = Literal["fraction", "tokens", "messages"]
 
 
@@ -41,6 +42,19 @@ class MemorySettings:
 
 
 @dataclass(frozen=True)
+class LoggingSettings:
+    enabled: bool
+    level: str
+    format: LoggingFormat
+    redact: bool
+
+
+@dataclass(frozen=True)
+class ObservabilitySettings:
+    logging: LoggingSettings
+
+
+@dataclass(frozen=True)
 class WindowClauseSettings:
     type: WindowClauseType
     value: float | int
@@ -60,4 +74,5 @@ class Settings:
     llm: LLMSettings
     agent: AgentSettings
     memory: MemorySettings
+    observability: ObservabilitySettings
     summarization: SummarizationSettings

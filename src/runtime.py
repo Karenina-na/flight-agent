@@ -9,6 +9,8 @@ class Context:
 
     user_id: str
     thread_id: str | None = None
+    request_id: str | None = None
+    run_id: str | None = None
     tenant_id: str | None = None
     workspace_id: str | None = None
     locale: str = "zh-CN"
@@ -22,6 +24,8 @@ def build_default_context(
     *,
     user_id: str,
     thread_id: str | None = None,
+    request_id: str | None = None,
+    run_id: str | None = None,
     tenant_id: str | None = None,
     workspace_id: str | None = None,
     locale: str = "zh-CN",
@@ -34,6 +38,8 @@ def build_default_context(
     return Context(
         user_id=user_id,
         thread_id=thread_id,
+        request_id=request_id,
+        run_id=run_id,
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         locale=locale,

@@ -16,6 +16,13 @@ memory:
     enabled: true
     type: "in_memory"
 
+observability:
+  logging:
+    enabled: true
+    level: "INFO"
+    format: "text"
+    redact: true
+
 summarization:
   enabled: true
   model: "main"

@@ -10,6 +10,8 @@ def test_context_keeps_user_id_as_required_minimum():
 
     assert context.user_id == "u1"
     assert context.thread_id is None
+    assert context.request_id is None
+    assert context.run_id is None
     assert context.tenant_id is None
     assert context.workspace_id is None
     assert context.locale == "zh-CN"
@@ -30,6 +32,8 @@ def test_build_default_context_populates_generic_fields():
     context = build_default_context(
         user_id="u1",
         thread_id="thread-1",
+        request_id="request-1",
+        run_id="run-1",
         tenant_id="tenant-1",
         workspace_id="workspace-1",
         locale="en-US",
@@ -42,6 +46,8 @@ def test_build_default_context_populates_generic_fields():
     assert context == Context(
         user_id="u1",
         thread_id="thread-1",
+        request_id="request-1",
+        run_id="run-1",
         tenant_id="tenant-1",
         workspace_id="workspace-1",
         locale="en-US",

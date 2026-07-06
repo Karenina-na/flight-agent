@@ -11,6 +11,8 @@ THREAD_CONFIG = {"configurable": {"thread_id": "demo-thread"}}
 DEMO_CONTEXT = build_default_context(
     user_id="1",
     thread_id="demo-thread",
+    request_id="demo-request",
+    run_id="demo-run",
     workspace_id="local-demo",
     metadata={"entrypoint": "main.py"},
 )

@@ -8,9 +8,11 @@ import yaml
 from src.config.schema import (
     AgentSettings,
     LLMSettings,
+    LoggingSettings,
     MemoryCheckpointerSettings,
     MemorySettings,
     MemoryStoreSettings,
+    ObservabilitySettings,
     Settings,
     SummarizationSettings,
     WindowClauseSettings,
@@ -35,6 +37,8 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
     memory_config = _require_mapping(raw_config, "memory")
     checkpointer_config = _require_mapping(memory_config, "checkpointer")
     store_config = _require_mapping(memory_config, "store")
+    observability_config = _require_mapping(raw_config, "observability")
+    logging_config = _require_mapping(observability_config, "logging")
     summarization_config = _require_mapping(raw_config, "summarization")
 
     return Settings(
@@ -56,6 +60,14 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
             store=MemoryStoreSettings(
                 enabled=_get_bool(store_config, "enabled"),
                 type=_get_memory_store_type(store_config, "type"),
+            ),
+        ),
+        observability=ObservabilitySettings(
+            logging=LoggingSettings(
+                enabled=_get_bool(logging_config, "enabled"),
+                level=_get_logging_level(logging_config, "level"),
+                format=_get_logging_format(logging_config, "format"),
+                redact=_get_bool(logging_config, "redact"),
             ),
         ),
         summarization=SummarizationSettings(
@@ -160,6 +172,25 @@ def _get_memory_store_type(config: dict[str, Any], key: str) -> str:
     if store_type != "in_memory":
         raise ValueError("Config value 'memory.store.type' must be: in_memory")
     return store_type
+
+
+def _get_logging_level(config: dict[str, Any], key: str) -> str:
+    level = _get_str(config, key).upper()
+    if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        raise ValueError(
+            "Config value 'observability.logging.level' must be one of: "
+            "DEBUG, INFO, WARNING, ERROR, CRITICAL"
+        )
+    return level
+
+
+def _get_logging_format(config: dict[str, Any], key: str) -> str:
+    logging_format = _get_str(config, key)
+    if logging_format not in {"text", "json"}:
+        raise ValueError(
+            "Config value 'observability.logging.format' must be one of: text, json"
+        )
+    return logging_format
 
 
 def _get_window_clause(config: dict[str, Any], key: str) -> WindowClauseSettings:

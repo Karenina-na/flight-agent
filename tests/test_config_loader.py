@@ -25,6 +25,13 @@ memory:
     enabled: true
     type: "in_memory"
 
+observability:
+  logging:
+    enabled: true
+    level: "DEBUG"
+    format: "json"
+    redact: false
+
 summarization:
   enabled: true
   model: "main"
@@ -58,6 +65,10 @@ summarization:
     assert settings.memory.checkpointer.type == "in_memory"
     assert settings.memory.store.enabled is True
     assert settings.memory.store.type == "in_memory"
+    assert settings.observability.logging.enabled is True
+    assert settings.observability.logging.level == "DEBUG"
+    assert settings.observability.logging.format == "json"
+    assert settings.observability.logging.redact is False
 
 
 def test_load_settings_falls_back_to_example_config():
@@ -72,6 +83,10 @@ def test_load_settings_falls_back_to_example_config():
     assert settings.memory.checkpointer.type == "in_memory"
     assert settings.memory.store.enabled is True
     assert settings.memory.store.type == "in_memory"
+    assert settings.observability.logging.enabled is True
+    assert settings.observability.logging.level == "INFO"
+    assert settings.observability.logging.format == "text"
+    assert settings.observability.logging.redact is True
     assert settings.summarization.enabled is True
     assert settings.summarization.trigger.type == "fraction"
     assert settings.summarization.trigger.value == 0.8
@@ -96,6 +111,7 @@ llm:
     assert settings.memory.checkpointer.type == "in_memory"
     assert settings.memory.store.enabled is True
     assert settings.memory.store.type == "in_memory"
+    assert settings.observability.logging.level == "INFO"
     assert settings.summarization.trigger.type == "fraction"
     assert settings.summarization.trigger.value == 0.8
 
@@ -120,6 +136,13 @@ memory:
   store:
     enabled: true
     type: "in_memory"
+
+observability:
+  logging:
+    enabled: true
+    level: "INFO"
+    format: "text"
+    redact: true
 
 summarization:
   enabled: true
