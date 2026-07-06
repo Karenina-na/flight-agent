@@ -72,6 +72,11 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
                 level=_get_logging_level(logging_config, "level"),
                 format=_get_logging_format(logging_config, "format"),
                 redact=_get_bool(logging_config, "redact"),
+                output_path=_get_str_with_default(
+                    logging_config,
+                    "output_path",
+                    "logs/skypilot.log",
+                ),
             ),
         ),
         summarization=SummarizationSettings(

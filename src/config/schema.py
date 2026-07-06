@@ -48,6 +48,7 @@ class LoggingSettings:
     level: str
     format: LoggingFormat
     redact: bool
+    output_path: str = "logs/skypilot.log"
 
 
 @dataclass(frozen=True)

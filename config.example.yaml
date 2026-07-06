@@ -22,6 +22,7 @@ observability:
     level: "INFO"
     format: "text"
     redact: true
+    output_path: "logs/skypilot.log"
 
 summarization:
   enabled: true

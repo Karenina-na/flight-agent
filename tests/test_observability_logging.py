@@ -9,7 +9,13 @@ from src.runtime import Context
 
 def test_text_logging_includes_event_and_context_ids(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            output_path="",
+        )
     )
     context = Context(
         user_id="u1",
@@ -32,7 +38,13 @@ def test_text_logging_includes_event_and_context_ids(capsys):
 
 def test_json_logging_outputs_parseable_json(capsys):
     configure_logging(
-        LoggingSettings(enabled=True, level="INFO", format="json", redact=True)
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="json",
+            redact=True,
+            output_path="",
+        )
     )
 
     log_event("tool_call_end", context=Context(user_id="u1"), tool_name="demo")
@@ -62,10 +74,37 @@ def test_sensitive_fields_are_redacted():
 
 def test_disabled_logging_suppresses_events(capsys):
     configure_logging(
-        LoggingSettings(enabled=False, level="INFO", format="text", redact=True)
+        LoggingSettings(
+            enabled=False,
+            level="INFO",
+            format="text",
+            redact=True,
+            output_path="",
+        )
     )
 
     log_event("model_call_start", level=logging.INFO)
 
     captured = capsys.readouterr()
     assert captured.err == ""
+
+
+def test_logging_writes_to_configured_file(tmp_path):
+    log_path = tmp_path / "logs" / "skypilot.log"
+    configure_logging(
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            output_path=str(log_path),
+        )
+    )
+
+    log_event("model_call_start", context=Context(user_id="u1"), message_count=2)
+
+    assert log_path.exists()
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "INFO event=model_call_start" in log_text
+    assert "user_id=u1" in log_text
+    assert "message_count=2" in log_text
