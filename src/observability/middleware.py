@@ -7,7 +7,12 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    ModelRequest,
+    ModelResponse,
+    ToolCallRequest,
+)
 
 from src.observability.events import log_event
 from src.runtime import Context
@@ -97,6 +102,94 @@ class ObservabilityMiddleware(AgentMiddleware):
         )
         return response
 
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Any],
+    ) -> Any:
+        """Record synchronous tool-call lifecycle events."""
+        context = _tool_request_context(request)
+        started_at = perf_counter()
+        tool_name = _tool_name(request)
+        argument_keys = _tool_argument_keys(request)
+        log_event(
+            "tool_call_start",
+            context=context,
+            redact=self.redact,
+            tool_name=tool_name,
+            argument_keys=argument_keys,
+        )
+
+        try:
+            response = handler(request)
+        except Exception as exc:
+            log_event(
+                "tool_call_error",
+                context=context,
+                level=logging.ERROR,
+                redact=self.redact,
+                tool_name=tool_name,
+                argument_keys=argument_keys,
+                duration_ms=_duration_ms(started_at),
+                error_type=type(exc).__name__,
+            )
+            raise
+
+        log_event(
+            "tool_call_end",
+            context=context,
+            redact=self.redact,
+            tool_name=tool_name,
+            argument_keys=argument_keys,
+            duration_ms=_duration_ms(started_at),
+            status=getattr(response, "status", "success"),
+        )
+        return response
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Any],
+    ) -> Any:
+        """Record asynchronous tool-call lifecycle events."""
+        context = _tool_request_context(request)
+        started_at = perf_counter()
+        tool_name = _tool_name(request)
+        argument_keys = _tool_argument_keys(request)
+        log_event(
+            "tool_call_start",
+            context=context,
+            redact=self.redact,
+            tool_name=tool_name,
+            argument_keys=argument_keys,
+        )
+
+        try:
+            response = await handler(request)
+        except Exception as exc:
+            log_event(
+                "tool_call_error",
+                context=context,
+                level=logging.ERROR,
+                redact=self.redact,
+                tool_name=tool_name,
+                argument_keys=argument_keys,
+                duration_ms=_duration_ms(started_at),
+                error_type=type(exc).__name__,
+            )
+            raise
+
+        log_event(
+            "tool_call_end",
+            context=context,
+            redact=self.redact,
+            tool_name=tool_name,
+            argument_keys=argument_keys,
+            duration_ms=_duration_ms(started_at),
+            status=getattr(response, "status", "success"),
+        )
+        return response
+
 
 def build_observability_middleware(*, redact: bool = True) -> ObservabilityMiddleware:
     """Build middleware that emits structured model lifecycle events."""
@@ -109,6 +202,26 @@ def _request_context(request: ModelRequest) -> Context | None:
     runtime = getattr(request, "runtime", None)
     context = getattr(runtime, "context", None)
     return context if isinstance(context, Context) else None
+
+
+def _tool_request_context(request: ToolCallRequest) -> Context | None:
+    context = getattr(request.runtime, "context", None)
+    return context if isinstance(context, Context) else None
+
+
+def _tool_name(request: ToolCallRequest) -> str:
+    if request.tool is not None:
+        return request.tool.name
+
+    name = request.tool_call.get("name")
+    return str(name or "unknown_tool")
+
+
+def _tool_argument_keys(request: ToolCallRequest) -> list[str]:
+    args = request.tool_call.get("args")
+    if not isinstance(args, dict):
+        return []
+    return sorted(str(key) for key in args)
 
 
 def _duration_ms(started_at: float) -> int:

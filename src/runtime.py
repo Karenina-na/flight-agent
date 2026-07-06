@@ -1,6 +1,7 @@
 """Runtime context shared across one agent invocation."""
 
 from dataclasses import dataclass, field
+from uuid import uuid4
 
 
 @dataclass(frozen=True)
@@ -38,8 +39,8 @@ def build_default_context(
     return Context(
         user_id=user_id,
         thread_id=thread_id,
-        request_id=request_id,
-        run_id=run_id,
+        request_id=request_id or _new_id("req"),
+        run_id=run_id or _new_id("run"),
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         locale=locale,
@@ -48,6 +49,10 @@ def build_default_context(
         permissions=permissions,
         metadata=metadata or {},
     )
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid4().hex}"
 
 
 __all__ = ["Context", "build_default_context"]

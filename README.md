@@ -121,10 +121,10 @@ observability:
 ```
 
 The first version uses Python's standard `logging` module. It records agent
-lifecycle events such as model call start, end, and error with runtime context
-ids like `user_id`, `thread_id`, `request_id`, and `run_id`. Logs do not include
-full prompts, full model responses, memory values, or skill file contents by
-default.
+lifecycle events such as model and tool call start, end, and error with runtime
+context ids like `user_id`, `thread_id`, `request_id`, and `run_id`. Logs do not
+include full prompts, full model responses, full tool arguments, memory values,
+or skill file contents by default.
 
 ### Summarization
 

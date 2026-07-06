@@ -21,6 +21,15 @@ def test_context_keeps_user_id_as_required_minimum():
     assert context.metadata == {}
 
 
+def test_build_default_context_generates_correlation_ids():
+    context = build_default_context(user_id="u1")
+
+    assert context.request_id is not None
+    assert context.request_id.startswith("req_")
+    assert context.run_id is not None
+    assert context.run_id.startswith("run_")
+
+
 def test_context_is_request_scoped_and_immutable():
     context = Context(user_id="u1")
 
