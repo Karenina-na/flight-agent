@@ -10,7 +10,7 @@ skill middleware, and a registry-based tool loading system.
 - `src/agent.py` - builds the LangChain agent.
 - `src/config/` - loads YAML configuration.
 - `src/runtime.py` - defines runtime context passed into tools.
-- `src/memory.py` - builds the configured LangGraph checkpointer.
+- `src/memory/` - builds the configured LangGraph checkpointer.
 - `src/prompt/` - builds system prompts from independent layers.
 - `src/tools/` - registry-based tool package.
 
@@ -88,7 +88,7 @@ memory:
 ```
 
 `in_memory` uses LangGraph's `InMemorySaver`, which is appropriate for local
-demos and tests. The factory boundary in `src/memory.py` keeps the agent wiring
+demos and tests. The factory boundary in `src/memory/` keeps the agent wiring
 ready for persistent checkpointers later.
 
 ### Summarization
