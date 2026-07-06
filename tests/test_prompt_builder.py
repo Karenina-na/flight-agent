@@ -10,19 +10,27 @@ from src.tools import get_tools
 
 
 def test_base_prompt_layers_do_not_name_concrete_tools():
-    assert "inspect_runtime_context" not in CORE_PROMPT
-    assert "inspect_runtime_context" not in DOMAIN_PROMPT
-    assert "create_demo_task" not in CORE_PROMPT
-    assert "create_demo_task" not in DOMAIN_PROMPT
+    assert "resolve_flight_locations" not in DOMAIN_PROMPT
+    assert "search_airfare_quotes" not in DOMAIN_PROMPT
+    assert "query_flight_information" not in DOMAIN_PROMPT
+
+
+def test_domain_prompt_positions_agent_for_air_ticket_fact_explanations():
+    assert "机票价格与航班事实说明助手" in DOMAIN_PROMPT
+    assert "不要直接做审计" in DOMAIN_PROMPT
+    assert "实时报价" in DOMAIN_PROMPT
+    assert "历史出票价格" in DOMAIN_PROMPT
 
 
 def test_tool_layer_is_generated_from_registered_tools():
     tool_prompt = build_tool_prompt(get_tools())
 
-    assert "inspect_runtime_context" in tool_prompt
-    assert "create_demo_task" in tool_prompt
-    assert "Inspect the runtime context" in tool_prompt
-    assert "Create a deterministic demo task ticket" in tool_prompt
+    assert "resolve_flight_locations" in tool_prompt
+    assert "search_airfare_quotes" in tool_prompt
+    assert "query_flight_information" in tool_prompt
+    assert "Resolve city, airport, or IATA inputs" in tool_prompt
+    assert "Search airfare quote facts" in tool_prompt
+    assert "Query flight information facts" in tool_prompt
 
 
 def test_prompt_package_exposes_build_modules():
@@ -35,5 +43,6 @@ def test_system_prompt_combines_layers():
 
     assert CORE_PROMPT in system_prompt
     assert DOMAIN_PROMPT in system_prompt
-    assert "inspect_runtime_context" in system_prompt
-    assert "create_demo_task" in system_prompt
+    assert "resolve_flight_locations" in system_prompt
+    assert "search_airfare_quotes" in system_prompt
+    assert "query_flight_information" in system_prompt

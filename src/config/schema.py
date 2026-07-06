@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
+AirTicketProviderType = Literal["mock", "flyclaw"]
 MemoryCheckpointerType = Literal["in_memory"]
 MemoryStoreType = Literal["in_memory"]
 LoggingFormat = Literal["text", "json"]
@@ -70,9 +71,23 @@ class SummarizationSettings:
 
 
 @dataclass(frozen=True)
+class FlyClawSettings:
+    timeout_seconds: int
+    proxy_url: str
+    route_relay: bool
+
+
+@dataclass(frozen=True)
+class AirTicketSettings:
+    provider: AirTicketProviderType
+    flyclaw: FlyClawSettings
+
+
+@dataclass(frozen=True)
 class Settings:
     llm: LLMSettings
     agent: AgentSettings
     memory: MemorySettings
     observability: ObservabilitySettings
     summarization: SummarizationSettings
+    air_ticket: AirTicketSettings

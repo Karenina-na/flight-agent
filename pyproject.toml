@@ -13,7 +13,9 @@ dependencies = [
     "langchain-mcp-adapters>=0.3.0",
     "langchain-openai",
     "langgraph",
+    "cryptography",
     "pyyaml",
+    "requests[socks]",
 ]
 
 [project.optional-dependencies]

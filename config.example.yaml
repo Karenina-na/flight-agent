@@ -33,3 +33,10 @@ summarization:
     type: "messages"
     value: 20
   trim_tokens_to_summarize: 4000
+
+air_ticket:
+  provider: "mock"
+  flyclaw:
+    timeout_seconds: 20
+    proxy_url: ""
+    route_relay: true

@@ -42,6 +42,13 @@ summarization:
     type: "messages"
     value: 20
   trim_tokens_to_summarize: 4000
+
+air_ticket:
+  provider: "mock"
+  flyclaw:
+    timeout_seconds: 20
+    proxy_url: "socks5h://127.0.0.1:1082"
+    route_relay: false
 """,
         encoding="utf-8",
     )
@@ -69,10 +76,14 @@ summarization:
     assert settings.observability.logging.level == "DEBUG"
     assert settings.observability.logging.format == "json"
     assert settings.observability.logging.redact is False
+    assert settings.air_ticket.provider == "mock"
+    assert settings.air_ticket.flyclaw.timeout_seconds == 20
+    assert settings.air_ticket.flyclaw.proxy_url == "socks5h://127.0.0.1:1082"
+    assert settings.air_ticket.flyclaw.route_relay is False
 
 
-def test_load_settings_falls_back_to_example_config():
-    settings = load_settings()
+def test_load_settings_falls_back_to_example_config(tmp_path: Path):
+    settings = load_settings(tmp_path / "config.yaml")
 
     assert settings.llm.base_url == "http://127.0.0.1:1234/v1"
     assert settings.llm.api_key == "not-needed"
@@ -90,6 +101,10 @@ def test_load_settings_falls_back_to_example_config():
     assert settings.summarization.enabled is True
     assert settings.summarization.trigger.type == "fraction"
     assert settings.summarization.trigger.value == 0.8
+    assert settings.air_ticket.provider == "mock"
+    assert settings.air_ticket.flyclaw.timeout_seconds == 20
+    assert settings.air_ticket.flyclaw.proxy_url == ""
+    assert settings.air_ticket.flyclaw.route_relay is True
 
 
 def test_load_settings_merges_default_config_with_local_overrides(tmp_path: Path):
@@ -114,6 +129,7 @@ llm:
     assert settings.observability.logging.level == "INFO"
     assert settings.summarization.trigger.type == "fraction"
     assert settings.summarization.trigger.value == 0.8
+    assert settings.air_ticket.provider == "mock"
 
 
 def test_load_settings_reports_missing_required_values(tmp_path: Path):
@@ -154,6 +170,11 @@ summarization:
     type: "messages"
     value: 20
   trim_tokens_to_summarize: 4000
+
+air_ticket:
+  provider: "mock"
+  flyclaw:
+    timeout_seconds: 20
 """,
         encoding="utf-8",
     )

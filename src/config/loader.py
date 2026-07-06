@@ -7,6 +7,8 @@ import yaml
 
 from src.config.schema import (
     AgentSettings,
+    AirTicketSettings,
+    FlyClawSettings,
     LLMSettings,
     LoggingSettings,
     MemoryCheckpointerSettings,
@@ -40,6 +42,8 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
     observability_config = _require_mapping(raw_config, "observability")
     logging_config = _require_mapping(observability_config, "logging")
     summarization_config = _require_mapping(raw_config, "summarization")
+    air_ticket_config = _require_mapping(raw_config, "air_ticket")
+    flyclaw_config = _require_mapping(air_ticket_config, "flyclaw")
 
     return Settings(
         llm=LLMSettings(
@@ -80,6 +84,14 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
                 "trim_tokens_to_summarize",
             ),
         ),
+        air_ticket=AirTicketSettings(
+            provider=_get_air_ticket_provider_type(air_ticket_config, "provider"),
+            flyclaw=FlyClawSettings(
+                timeout_seconds=_get_int(flyclaw_config, "timeout_seconds"),
+                proxy_url=_get_str_with_default(flyclaw_config, "proxy_url", ""),
+                route_relay=_get_bool_with_default(flyclaw_config, "route_relay", True),
+            ),
+        ),
     )
 
 
@@ -116,6 +128,13 @@ def _get_str(config: dict[str, Any], key: str) -> str:
     value = config.get(key)
     if value is None:
         raise ValueError(f"Missing required config value: {key}")
+    return str(value)
+
+
+def _get_str_with_default(config: dict[str, Any], key: str, default: str) -> str:
+    value = config.get(key)
+    if value is None:
+        return default
     return str(value)
 
 
@@ -158,6 +177,15 @@ def _get_bool(config: dict[str, Any], key: str) -> bool:
     raise ValueError(f"Config value '{key}' must be a bool")
 
 
+def _get_bool_with_default(config: dict[str, Any], key: str, default: bool) -> bool:
+    value = config.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"Config value '{key}' must be a bool")
+
+
 def _get_memory_checkpointer_type(config: dict[str, Any], key: str) -> str:
     checkpointer_type = _get_str(config, key)
     if checkpointer_type != "in_memory":
@@ -191,6 +219,16 @@ def _get_logging_format(config: dict[str, Any], key: str) -> str:
             "Config value 'observability.logging.format' must be one of: text, json"
         )
     return logging_format
+
+
+def _get_air_ticket_provider_type(config: dict[str, Any], key: str) -> str:
+    provider_type = _get_str(config, key)
+    if provider_type not in {"mock", "flyclaw"}:
+        raise ValueError(
+            "Config value 'air_ticket.provider' must be one of: "
+            "mock, flyclaw"
+        )
+    return provider_type
 
 
 def _get_window_clause(config: dict[str, Any], key: str) -> WindowClauseSettings:
