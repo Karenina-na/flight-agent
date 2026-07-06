@@ -1,103 +1,125 @@
-"""Console demo for validating agent streaming and tool calls."""
+"""Interactive CLI entrypoint for the air ticket agent."""
 
 from collections.abc import Iterable
+from dataclasses import dataclass
+from uuid import uuid4
 
 from langchain.messages import HumanMessage
 
 from src.agent import agent
 from src.observability import observe_agent_stream
-from src.runtime import build_default_context
+from src.runtime import Context, build_default_context
+from src.tools import get_tools
 
-THREAD_CONFIG = {"configurable": {"thread_id": "demo-thread"}}
-TOOL_DEMO_MESSAGE = (
+APP_USER_ID = "local-cli"
+DEFAULT_WORKSPACE_ID = "local-cli"
+HELP_TEXT = """可用命令：
+/help   显示帮助
+/new    开始一个新会话
+/tools  查看当前已注册工具
+/demo   运行一条机票报价示例
+/exit   退出
+
+直接输入问题即可调用机票事实查询 agent，例如：
+北京到上海 2026-07-10 的机票大概多少钱？
+CA981 这个航班有什么信息？"""
+DEMO_MESSAGE = (
     "请查询北京到上海在 2026-07-10 的机票报价样本，"
     "并说明查到的事实、数据来源、查询时间和数据限制。"
 )
-STREAM_DEMO_MESSAGE = (
-    "用一句话说明这个 agent demo 如何验证机票事实查询能力、"
-    "工具调用和流式输出。"
-)
-DEMO_CONTEXT = build_default_context(
-    user_id="1",
-    thread_id="demo-thread",
-    request_id="demo-request",
-    run_id="demo-run",
-    workspace_id="local-demo",
-    metadata={"entrypoint": "main.py"},
-)
 
 
-def run_demo() -> None:
-    """Run concise streaming demos against the configured agent."""
-    show_tool_call_updates()
-    print()
-    show_message_stream()
+@dataclass
+class CliSession:
+    """Current CLI conversation session."""
+
+    thread_id: str
+
+    @classmethod
+    def new(cls) -> "CliSession":
+        return cls(thread_id=_new_thread_id())
+
+    @property
+    def config(self) -> dict:
+        return {"configurable": {"thread_id": self.thread_id}}
+
+    def context(self) -> Context:
+        return build_default_context(
+            user_id=APP_USER_ID,
+            thread_id=self.thread_id,
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            metadata={"entrypoint": "main.py"},
+        )
 
 
-def show_tool_call_updates() -> None:
-    """Show agent/tool execution steps without dumping full graph state."""
-    print("=== Agent 执行过程 ===\n")
+def run_cli() -> None:
+    """Run the interactive command-line agent shell."""
+    session = CliSession.new()
+    print("机票事实查询 Agent CLI。输入 /help 查看命令。")
+    print(f"当前会话: {session.thread_id}")
 
-    for chunk in observe_agent_stream(
-        agent.stream(
-            {
-                "messages": [
-                    HumanMessage(content=TOOL_DEMO_MESSAGE)
-                ]
-            },
-            config=THREAD_CONFIG,
-            context=DEMO_CONTEXT,
-            stream_mode="updates",
-        ),
-        DEMO_CONTEXT,
-        entrypoint="main.show_tool_call_updates",
-        stream_mode="updates",
-    ):
-        print_update_chunk(chunk)
+    while True:
+        try:
+            raw_input = input("\n> ")
+        except (EOFError, KeyboardInterrupt):
+            print("\n再见。")
+            return
 
-
-def print_update_chunk(chunk: dict) -> None:
-    """Print a compact view of update-mode stream chunks."""
-    if not isinstance(chunk, dict):
-        return
-
-    for node_name, update in chunk.items():
-        if not isinstance(update, dict):
+        message = raw_input.strip()
+        if not message:
             continue
 
-        for message in update.get("messages") or []:
-            if message.type == "ai" and getattr(message, "tool_calls", None):
-                tool_names = [tool_call["name"] for tool_call in message.tool_calls]
-                print(f"[{node_name}] 请求调用: {', '.join(tool_names)}")
-            elif message.type == "tool":
-                print(f"[{node_name}] 工具返回 [{message.name}]: {message.content}")
-            elif message.type == "ai" and message.content:
-                print(f"[{node_name}] 回复: {_preview(message.content)}")
+        command_result = handle_command(message, session)
+        if command_result == "exit":
+            print("再见。")
+            return
+        if isinstance(command_result, CliSession):
+            session = command_result
+            print(f"已开始新会话: {session.thread_id}")
+            continue
+        if isinstance(command_result, str):
+            print(command_result)
+            continue
+
+        stream_agent_response(message, session)
 
 
-def show_message_stream() -> None:
-    """Show a short token stream, optional reasoning, and source metadata."""
-    print("=== 实时流式回复 ===\n")
+def handle_command(message: str, session: CliSession) -> str | CliSession | None:
+    """Handle slash commands; return None when input should go to the agent."""
+    command = message.lower()
+    if command in {"/exit", "/quit", "exit", "quit"}:
+        return "exit"
+    if command == "/help":
+        return HELP_TEXT
+    if command == "/new":
+        return CliSession.new()
+    if command == "/tools":
+        return format_tools()
+    if command == "/demo":
+        stream_agent_response(DEMO_MESSAGE, session)
+        return ""
+    if message.startswith("/"):
+        return f"未知命令: {message}\n输入 /help 查看可用命令。"
+    return None
 
-    first_metadata: dict | None = None
-    first_chunk_type: str | None = None
+
+def stream_agent_response(message: str, session: CliSession) -> None:
+    """Stream one user message through the agent and print a compact transcript."""
+    context = session.context()
     answer_started = False
     reasoning_started = False
     saw_reasoning = False
     saw_reasoning_block = False
+
     for message_chunk, metadata in observe_agent_stream(
         agent.stream(
-            {
-                "messages": [
-                    HumanMessage(content=STREAM_DEMO_MESSAGE)
-                ]
-            },
-            config=THREAD_CONFIG,
-            context=DEMO_CONTEXT,
+            {"messages": [HumanMessage(content=message)]},
+            config=session.config,
+            context=context,
             stream_mode="messages",
         ),
-        DEMO_CONTEXT,
-        entrypoint="main.show_message_stream",
+        context,
+        entrypoint="main.stream_agent_response",
         stream_mode="messages",
     ):
         saw_reasoning_block = saw_reasoning_block or _has_reasoning_block(
@@ -106,7 +128,7 @@ def show_message_stream() -> None:
         reasoning = _reasoning_text(message_chunk)
         if reasoning:
             if not reasoning_started:
-                print("思考流（provider 暴露时显示）:")
+                print("思考流:")
                 reasoning_started = True
             print(reasoning, end="", flush=True)
             saw_reasoning = True
@@ -119,30 +141,23 @@ def show_message_stream() -> None:
             if saw_reasoning:
                 print("\n")
             elif saw_reasoning_block:
-                print(
-                    "思考流（LangChain content_blocks 暴露时显示）: "
-                    "检测到 reasoning block，但 LangChain 未暴露 reasoning 文本。\n"
-                )
-            else:
-                print(
-                    "思考流（LangChain content_blocks 暴露时显示）: "
-                    "当前没有 reasoning。\n"
-                )
+                print("思考流: 检测到 reasoning block，但未暴露文本。\n")
             print("回复:")
             answer_started = True
 
         print(content, end="", flush=True)
 
-        if first_metadata is None:
-            first_metadata = metadata
-            first_chunk_type = type(message_chunk).__name__
+    if answer_started:
+        print()
 
-    print()
-    if first_metadata is not None:
-        print(
-            f"\n来源节点: {first_metadata.get('langgraph_node')}\n"
-            f"消息类型: {first_chunk_type}"
-        )
+
+def format_tools() -> str:
+    """Render registered tools for CLI display."""
+    lines = ["当前已注册工具："]
+    for tool in get_tools():
+        description = str(getattr(tool, "description", "")).strip()
+        lines.append(f"- {tool.name}: {description}")
+    return "\n".join(lines)
 
 
 def _message_text(message_chunk: object) -> str:
@@ -229,10 +244,9 @@ def _reasoning_from_value(value: object) -> list[str]:
     return []
 
 
-def _preview(content: object, limit: int = 120) -> str:
-    text = _message_text(content)
-    return text if len(text) <= limit else f"{text[: limit - 3]}..."
+def _new_thread_id() -> str:
+    return f"cli-{uuid4().hex[:8]}"
 
 
 if __name__ == "__main__":
-    run_demo()
+    run_cli()
