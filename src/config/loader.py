@@ -8,6 +8,7 @@ import yaml
 from src.config.schema import (
     AgentSettings,
     LLMSettings,
+    MemorySettings,
     Settings,
     SummarizationSettings,
     WindowClauseSettings,
@@ -29,6 +30,7 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
 
     llm_config = _require_mapping(raw_config, "llm")
     agent_config = _require_mapping(raw_config, "agent")
+    memory_config = _require_mapping(raw_config, "memory")
     summarization_config = _require_mapping(raw_config, "summarization")
 
     return Settings(
@@ -42,6 +44,9 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
         ),
         agent=AgentSettings(
             default_thread_id=_get_str(agent_config, "default_thread_id"),
+        ),
+        memory=MemorySettings(
+            type=_get_memory_type(memory_config, "type"),
         ),
         summarization=SummarizationSettings(
             enabled=_get_bool(summarization_config, "enabled"),
@@ -129,6 +134,13 @@ def _get_bool(config: dict[str, Any], key: str) -> bool:
     if isinstance(value, bool):
         return value
     raise ValueError(f"Config value '{key}' must be a bool")
+
+
+def _get_memory_type(config: dict[str, Any], key: str) -> str:
+    memory_type = _get_str(config, key)
+    if memory_type != "in_memory":
+        raise ValueError("Config value 'memory.type' must be: in_memory")
+    return memory_type
 
 
 def _get_window_clause(config: dict[str, Any], key: str) -> WindowClauseSettings:

@@ -9,6 +9,9 @@ llm:
 agent:
   default_thread_id: "1"
 
+memory:
+  type: "in_memory"
+
 summarization:
   enabled: true
   model: "main"

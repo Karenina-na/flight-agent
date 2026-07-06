@@ -18,6 +18,9 @@ llm:
 agent:
   default_thread_id: "test-thread"
 
+memory:
+  type: "in_memory"
+
 summarization:
   enabled: true
   model: "main"
@@ -48,6 +51,7 @@ summarization:
     assert settings.summarization.keep.type == "messages"
     assert settings.summarization.keep.value == 20
     assert settings.summarization.trim_tokens_to_summarize == 4000
+    assert settings.memory.type == "in_memory"
 
 
 def test_load_settings_falls_back_to_example_config():
@@ -59,6 +63,7 @@ def test_load_settings_falls_back_to_example_config():
     assert settings.llm.temperature == 0.3
     assert settings.llm.context_window_tokens == 8192
     assert settings.agent.default_thread_id == "1"
+    assert settings.memory.type == "in_memory"
     assert settings.summarization.enabled is True
     assert settings.summarization.trigger.type == "fraction"
     assert settings.summarization.trigger.value == 0.8
@@ -80,6 +85,7 @@ llm:
     assert settings.llm.model == "override-model"
     assert settings.llm.temperature == 0.9
     assert settings.llm.context_window_tokens == 8192
+    assert settings.memory.type == "in_memory"
     assert settings.summarization.trigger.type == "fraction"
     assert settings.summarization.trigger.value == 0.8
 
@@ -97,6 +103,9 @@ llm:
 
 agent:
   default_thread_id: "test-thread"
+
+memory:
+  type: "in_memory"
 
 summarization:
   enabled: true
@@ -155,3 +164,21 @@ summarization:
         assert "trigger.value" in str(exc)
     else:
         raise AssertionError("Expected invalid fraction trigger to raise ValueError")
+
+
+def test_load_settings_reports_invalid_memory_type(tmp_path: Path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+memory:
+  type: "sqlite"
+""",
+        encoding="utf-8",
+    )
+
+    try:
+        load_settings(config_path)
+    except ValueError as exc:
+        assert "memory.type" in str(exc)
+    else:
+        raise AssertionError("Expected invalid memory type to raise ValueError")

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
+MemoryType = Literal["in_memory"]
 WindowClauseType = Literal["fraction", "tokens", "messages"]
 
 
@@ -19,6 +20,11 @@ class LLMSettings:
 @dataclass(frozen=True)
 class AgentSettings:
     default_thread_id: str
+
+
+@dataclass(frozen=True)
+class MemorySettings:
+    type: MemoryType
 
 
 @dataclass(frozen=True)
@@ -40,4 +46,5 @@ class SummarizationSettings:
 class Settings:
     llm: LLMSettings
     agent: AgentSettings
+    memory: MemorySettings
     summarization: SummarizationSettings
