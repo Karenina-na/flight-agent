@@ -16,10 +16,17 @@ def test_base_prompt_layers_do_not_name_concrete_tools():
 
 
 def test_domain_prompt_positions_agent_for_air_ticket_fact_explanations():
-    assert "机票价格与航班事实说明助手" in DOMAIN_PROMPT
-    assert "不要直接做审计" in DOMAIN_PROMPT
-    assert "实时报价" in DOMAIN_PROMPT
+    assert "机票事实查询助手" in DOMAIN_PROMPT
+    assert "MVP 只聚焦三类问题" in DOMAIN_PROMPT
+    assert "优先调用对应的已注册能力获取事实" in DOMAIN_PROMPT
+    assert "报销审批" in DOMAIN_PROMPT
+    assert "价格一定合理/不合理" in DOMAIN_PROMPT
+    assert "当前报价不等于历史出票价格" in DOMAIN_PROMPT
     assert "历史出票价格" in DOMAIN_PROMPT
+    assert "行李额" not in DOMAIN_PROMPT
+    assert "准点率" not in DOMAIN_PROMPT
+    assert "历史平均票价区间" not in DOMAIN_PROMPT
+    assert "能力调用 ID" not in DOMAIN_PROMPT
 
 
 def test_tool_layer_is_generated_from_registered_tools():

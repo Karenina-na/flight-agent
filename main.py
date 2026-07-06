@@ -9,6 +9,14 @@ from src.observability import observe_agent_stream
 from src.runtime import build_default_context
 
 THREAD_CONFIG = {"configurable": {"thread_id": "demo-thread"}}
+TOOL_DEMO_MESSAGE = (
+    "请查询北京到上海在 2026-07-10 的机票报价样本，"
+    "并说明查到的事实、数据来源、查询时间和数据限制。"
+)
+STREAM_DEMO_MESSAGE = (
+    "用一句话说明这个 agent demo 如何验证机票事实查询能力、"
+    "工具调用和流式输出。"
+)
 DEMO_CONTEXT = build_default_context(
     user_id="1",
     thread_id="demo-thread",
@@ -34,13 +42,7 @@ def show_tool_call_updates() -> None:
         agent.stream(
             {
                 "messages": [
-                    HumanMessage(
-                        content=(
-                            "请先检查 runtime context 是否能传入工具，"
-                            "再调用 create_demo_task 创建任务："
-                            "title='验证 agent 可以发现并调用工具'，priority='high'。"
-                        )
-                    )
+                    HumanMessage(content=TOOL_DEMO_MESSAGE)
                 ]
             },
             config=THREAD_CONFIG,
@@ -87,7 +89,7 @@ def show_message_stream() -> None:
         agent.stream(
             {
                 "messages": [
-                    HumanMessage(content="用一句话说明这个 agent demo 能验证什么。")
+                    HumanMessage(content=STREAM_DEMO_MESSAGE)
                 ]
             },
             config=THREAD_CONFIG,

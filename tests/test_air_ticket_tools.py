@@ -1,6 +1,22 @@
 import json
+from types import SimpleNamespace
+
+import pytest
 
 from src.tools import get_tools
+from src.config.schema import AirTicketSettings, FlyClawSettings
+
+
+@pytest.fixture(autouse=True)
+def use_mock_air_ticket_provider(monkeypatch):
+    settings = AirTicketSettings(
+        provider="mock",
+        flyclaw=FlyClawSettings(timeout_seconds=20, proxy_url="", route_relay=True),
+    )
+    monkeypatch.setattr(
+        "src.air_ticket.facade.load_settings",
+        lambda: SimpleNamespace(air_ticket=settings),
+    )
 
 
 def _tool_by_name(name: str):
