@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from hashlib import sha256
 from time import perf_counter
 from typing import Any
 
@@ -33,6 +34,24 @@ def log_event(
             "fields": event_fields,
         },
     )
+
+
+def text_trace_fields(prefix: str, text: str) -> dict[str, Any]:
+    """Return safe text trace fields without logging raw content."""
+    encoded = text.encode("utf-8")
+    return {
+        f"{prefix}_chars": len(text),
+        f"{prefix}_bytes": len(encoded),
+        f"{prefix}_sha256": sha256(encoded).hexdigest(),
+    }
+
+
+def full_text_trace_fields(prefix: str, text: str) -> dict[str, Any]:
+    """Return full debug text trace fields, including raw text."""
+    return {
+        prefix: text,
+        **text_trace_fields(prefix, text),
+    }
 
 
 @contextmanager
@@ -103,6 +122,8 @@ def _context_fields(context: Context | None) -> dict[str, Any]:
     return {
         "user_id": context.user_id,
         "thread_id": context.thread_id,
+        "trace_id": context.thread_id or context.run_id or context.request_id,
+        "turn_id": context.request_id,
         "tenant_id": context.tenant_id,
         "workspace_id": context.workspace_id,
         "request_id": context.request_id,
@@ -115,4 +136,10 @@ def _duration_ms(started_at: float) -> int:
     return round((perf_counter() - started_at) * 1000)
 
 
-__all__ = ["log_event", "observe_agent_run", "observe_agent_stream"]
+__all__ = [
+    "full_text_trace_fields",
+    "log_event",
+    "observe_agent_run",
+    "observe_agent_stream",
+    "text_trace_fields",
+]

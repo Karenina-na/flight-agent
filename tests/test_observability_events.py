@@ -1,7 +1,12 @@
 import pytest
 
 from src.config import LoggingSettings
-from src.observability import observe_agent_run, observe_agent_stream
+from src.observability import (
+    full_text_trace_fields,
+    observe_agent_run,
+    observe_agent_stream,
+    text_trace_fields,
+)
 from src.observability.logging import configure_logging
 from src.runtime import Context
 
@@ -38,6 +43,8 @@ def test_observe_agent_run_logs_start_and_end(capsys):
     assert "user_id=u1" in captured.err
     assert "request_id=request-1" in captured.err
     assert "run_id=run-1" in captured.err
+    assert "trace_id=thread-1" in captured.err
+    assert "turn_id=request-1" in captured.err
     assert "duration_ms=" in captured.err
 
 
@@ -95,3 +102,21 @@ def test_observe_agent_stream_yields_items_and_logs_run(capsys):
     assert "event=agent_run_end" in captured.err
     assert "entrypoint=test.stream" in captured.err
     assert "stream_mode=messages" in captured.err
+
+
+def test_text_trace_fields_records_safe_text_summary_only():
+    fields = text_trace_fields("user_input", "查询明天北京到上海")
+
+    assert fields["user_input_chars"] == 9
+    assert fields["user_input_bytes"] == len("查询明天北京到上海".encode("utf-8"))
+    assert len(fields["user_input_sha256"]) == 64
+    assert "查询明天北京到上海" not in fields.values()
+
+
+def test_full_text_trace_fields_records_raw_text_and_summary():
+    fields = full_text_trace_fields("user_input", "查询明天北京到上海")
+
+    assert fields["user_input"] == "查询明天北京到上海"
+    assert fields["user_input_chars"] == 9
+    assert fields["user_input_bytes"] == len("查询明天北京到上海".encode("utf-8"))
+    assert len(fields["user_input_sha256"]) == 64

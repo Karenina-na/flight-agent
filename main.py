@@ -8,7 +8,7 @@ from langchain.messages import HumanMessage
 from langchain_core.messages import AIMessageChunk
 
 from src.agent import agent
-from src.observability import observe_agent_stream
+from src.observability import full_text_trace_fields, log_event, observe_agent_stream
 from src.runtime import Context, build_default_context
 from src.tools import get_tools
 
@@ -111,48 +111,89 @@ def stream_agent_response(message: str, session: CliSession) -> None:
     reasoning_started = False
     saw_reasoning = False
     saw_reasoning_block = False
+    assistant_parts: list[str] = []
+    assistant_chunk_count = 0
 
-    for message_chunk, metadata in observe_agent_stream(
-        agent.stream(
-            {"messages": [HumanMessage(content=message)]},
-            config=session.config,
-            context=context,
-            stream_mode="messages",
-        ),
-        context,
+    log_event(
+        "conversation_turn_start",
+        context=context,
+        redact=False,
         entrypoint="main.stream_agent_response",
-        stream_mode="messages",
-    ):
-        if not _is_assistant_chunk(message_chunk):
-            continue
+        **full_text_trace_fields("user_input", message),
+    )
 
-        saw_reasoning_block = saw_reasoning_block or _has_reasoning_block(
-            message_chunk
+    try:
+        for message_chunk, metadata in observe_agent_stream(
+            agent.stream(
+                {"messages": [HumanMessage(content=message)]},
+                config=session.config,
+                context=context,
+                stream_mode="messages",
+            ),
+            context,
+            entrypoint="main.stream_agent_response",
+            stream_mode="messages",
+        ):
+            if not _is_assistant_chunk(message_chunk):
+                continue
+
+            saw_reasoning_block = saw_reasoning_block or _has_reasoning_block(
+                message_chunk
+            )
+            reasoning = _reasoning_text(message_chunk)
+            if reasoning:
+                if not reasoning_started:
+                    print("思考流:")
+                    reasoning_started = True
+                print(reasoning, end="", flush=True)
+                saw_reasoning = True
+
+            content = _message_text(message_chunk)
+            if not content:
+                continue
+
+            assistant_parts.append(content)
+            assistant_chunk_count += 1
+
+            if not answer_started:
+                if saw_reasoning:
+                    print("\n")
+                elif saw_reasoning_block:
+                    print("思考流: 检测到 reasoning block，但未暴露文本。\n")
+                print("回复:")
+                answer_started = True
+
+            print(content, end="", flush=True)
+    except Exception as exc:
+        partial_output = "".join(assistant_parts)
+        log_event(
+            "conversation_turn_error",
+            context=context,
+            redact=False,
+            entrypoint="main.stream_agent_response",
+            assistant_chunk_count=assistant_chunk_count,
+            reasoning_block_seen=saw_reasoning_block,
+            reasoning_text_seen=saw_reasoning,
+            error_type=type(exc).__name__,
+            **full_text_trace_fields("partial_assistant_output", partial_output),
         )
-        reasoning = _reasoning_text(message_chunk)
-        if reasoning:
-            if not reasoning_started:
-                print("思考流:")
-                reasoning_started = True
-            print(reasoning, end="", flush=True)
-            saw_reasoning = True
-
-        content = _message_text(message_chunk)
-        if not content:
-            continue
-
-        if not answer_started:
-            if saw_reasoning:
-                print("\n")
-            elif saw_reasoning_block:
-                print("思考流: 检测到 reasoning block，但未暴露文本。\n")
-            print("回复:")
-            answer_started = True
-
-        print(content, end="", flush=True)
+        raise
 
     if answer_started:
         print()
+
+    assistant_output = "".join(assistant_parts)
+    log_event(
+        "conversation_turn_end",
+        context=context,
+        redact=False,
+        entrypoint="main.stream_agent_response",
+        assistant_chunk_count=assistant_chunk_count,
+        reasoning_block_seen=saw_reasoning_block,
+        reasoning_text_seen=saw_reasoning,
+        answer_started=answer_started,
+        **full_text_trace_fields("assistant_output", assistant_output),
+    )
 
 
 def format_tools() -> str:

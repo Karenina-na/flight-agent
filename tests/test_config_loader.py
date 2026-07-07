@@ -89,7 +89,7 @@ def test_load_settings_falls_back_to_example_config(tmp_path: Path):
 
     assert settings.llm.base_url == "http://127.0.0.1:1234/v1"
     assert settings.llm.api_key == "not-needed"
-    assert settings.llm.model == "google/gemma-4-e2b"
+    assert settings.llm.model == "qwen3.5-4b-mlx"
     assert settings.llm.temperature == 0.3
     assert settings.llm.context_window_tokens == 8192
     assert settings.agent.default_thread_id == "1"

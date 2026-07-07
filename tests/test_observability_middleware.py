@@ -3,12 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
-from langchain.messages import AIMessage, ToolMessage
+from langchain.messages import AIMessage, HumanMessage, ToolMessage
 from langchain.tools import ToolRuntime, tool
 from langchain_openai import ChatOpenAI
 
 from src.config import LoggingSettings
 from src.observability import ObservabilityMiddleware
+from src.observability.middleware import _tool_definition_trace
 from src.observability.logging import configure_logging
 from src.runtime import Context
 
@@ -27,6 +28,22 @@ def _request() -> ModelRequest:
         model=_model(),
         messages=[],
         system_prompt="Base prompt.",
+        runtime=SimpleNamespace(
+            context=Context(
+                user_id="u1",
+                thread_id="thread-1",
+                request_id="request-1",
+                run_id="run-1",
+            )
+        ),
+    )
+
+
+def _request_with_messages() -> ModelRequest:
+    return ModelRequest(
+        model=_model(),
+        messages=[HumanMessage(content="用户原文需要完整进日志")],
+        system_prompt="完整 system prompt 需要进日志。",
         runtime=SimpleNamespace(
             context=Context(
                 user_id="u1",
@@ -100,6 +117,32 @@ def test_observability_middleware_logs_successful_model_call(capsys):
     assert "duration_ms=" in captured.err
 
 
+def test_observability_middleware_logs_complete_model_trace(capsys):
+    configure_logging(
+        LoggingSettings(
+            enabled=True,
+            level="INFO",
+            format="text",
+            redact=True,
+            console=True,
+        )
+    )
+    middleware = ObservabilityMiddleware()
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[AIMessage(content="模型原文需要完整进日志")])
+
+    middleware.wrap_model_call(_request_with_messages(), handler)
+
+    captured = capsys.readouterr()
+    assert "request_trace=" in captured.err
+    assert "response_trace=" in captured.err
+    assert "完整 system prompt 需要进日志。" in captured.err
+    assert "用户原文需要完整进日志" in captured.err
+    assert "模型原文需要完整进日志" in captured.err
+    assert "content_sha256" in captured.err
+
+
 def test_observability_middleware_logs_error_and_reraises(capsys):
     configure_logging(
         LoggingSettings(
@@ -151,10 +194,35 @@ def test_observability_middleware_logs_successful_tool_call(capsys):
     assert "event=tool_call_start" in captured.err
     assert "event=tool_call_end" in captured.err
     assert "tool_name=demo_tool" in captured.err
+    assert "tool_call_id=call-1" in captured.err
     assert "argument_keys=['api_key', 'title']" in captured.err
+    assert "tool_call=" in captured.err
+    assert "response_trace=" in captured.err
     assert "duration_ms=" in captured.err
-    assert "secret" not in captured.err
-    assert "task" not in captured.err
+    assert "secret" in captured.err
+    assert "task" in captured.err
+    assert "ok" in captured.err
+
+
+def test_tool_definition_trace_falls_back_when_schema_is_not_json_serializable():
+    class BrokenSchema:
+        @classmethod
+        def model_json_schema(cls):
+            raise ValueError("Cannot generate a JsonSchema for core_schema.CallableSchema")
+
+    tool_like = SimpleNamespace(
+        name="broken_schema_tool",
+        description="Tool with a schema that pydantic cannot render.",
+        args_schema=BrokenSchema,
+    )
+
+    trace = _tool_definition_trace(tool_like)
+
+    assert trace["name"] == "broken_schema_tool"
+    assert trace["description"] == "Tool with a schema that pydantic cannot render."
+    assert trace["args_schema"]["schema_type"] == "type"
+    assert trace["args_schema"]["schema_error_type"] == "ValueError"
+    assert "CallableSchema" in trace["args_schema"]["schema_error"]
 
 
 def test_observability_middleware_logs_tool_error_and_reraises(capsys):
