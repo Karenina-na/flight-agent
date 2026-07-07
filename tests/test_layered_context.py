@@ -3,6 +3,7 @@ from langchain.messages import AIMessage, HumanMessage, ToolMessage
 from src.guardrails.layered_context import (
     build_layered_context_state,
     has_compressible_history,
+    partition_messages_for_compaction,
 )
 
 
@@ -99,3 +100,19 @@ def test_has_compressible_history_requires_more_than_latest_user_message():
             HumanMessage(content="最新问题"),
         ]
     )
+
+
+def test_partition_messages_for_compaction_keeps_recent_human_turns_raw():
+    messages = [
+        HumanMessage(content="第一轮"),
+        AIMessage(content="第一轮回答"),
+        ToolMessage(content='{"ok":true}', name="demo", tool_call_id="call-1"),
+        HumanMessage(content="第二轮"),
+        AIMessage(content="第二轮回答"),
+        HumanMessage(content="第三轮"),
+    ]
+
+    prefix, raw_suffix = partition_messages_for_compaction(messages, raw_recent_turns=2)
+
+    assert [message.content for message in prefix] == ["第一轮", "第一轮回答", '{"ok":true}']
+    assert [message.content for message in raw_suffix] == ["第二轮", "第二轮回答", "第三轮"]

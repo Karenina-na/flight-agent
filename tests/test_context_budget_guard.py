@@ -224,7 +224,11 @@ def test_context_budget_guard_compacts_web_41e6d813_like_request():
     assert "不要编造账本之外的工具结果" in compact_prompt
     assert "dropped_observation_count" in compact_prompt
     assert "2026-07-10" in compact_prompt
-    assert "2026-07-20" in compact_prompt
+    assert "2026-07-20" not in compact_prompt
+    assert any(
+        "2026-07-20" in str(getattr(message, "content", ""))
+        for message in compact_request.messages[2:]
+    )
     assert isinstance(compact_request.messages[-1], HumanMessage)
     assert compact_request.messages[-1].content == "请你查询后一个月每一天的机票，并做一个汇总表格"
 
@@ -339,3 +343,43 @@ def test_context_budget_guard_preserves_each_tool_observation_card():
     for index in range(10):
         assert f"call-{index}" in compact_prompt
         assert f'"slot": {index}' in compact_prompt
+
+
+def test_context_budget_guard_compacts_old_turns_without_duplicating_raw_suffix():
+    guard = ContextBudgetGuard(context_window_tokens=10, max_fraction=0.10)
+    seen_requests: list[ModelRequest] = []
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        seen_requests.append(request)
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    request = _request(
+        messages=[
+            HumanMessage(content="第一轮：查询北京到上海"),
+            AIMessage(content="第一轮工具调用完成。"),
+            ToolMessage(
+                content='{"query":{"slot":"old"},"records":[{"amount":1}]}',
+                name="generic_lookup",
+                tool_call_id="old-call",
+            ),
+            AIMessage(content="第一轮最终摘要：old-tail-marker"),
+            HumanMessage(content="第二轮：保留这个最近 turn 原文"),
+            AIMessage(content="第二轮 assistant 原文：raw-suffix-marker"),
+            HumanMessage(content="第三轮：最新问题"),
+        ],
+        system_prompt="system" * 100,
+        tools=[{"name": "generic_lookup", "description": "tool" * 50}],
+    )
+
+    guard.wrap_model_call(request, handler)
+
+    compact_request = seen_requests[0]
+    assert [message.type for message in compact_request.messages] == ["ai", "tool", "human", "ai", "human"]
+    _, tool_message = _ledger_messages(compact_request.messages)
+    compact_prompt = tool_message.content
+    assert "old-call" in compact_prompt
+    assert "第一轮：查询北京到上海" in compact_prompt
+    assert "raw-suffix-marker" not in compact_prompt
+    assert compact_request.messages[2].content == "第二轮：保留这个最近 turn 原文"
+    assert compact_request.messages[3].content == "第二轮 assistant 原文：raw-suffix-marker"
+    assert compact_request.messages[4].content == "第三轮：最新问题"

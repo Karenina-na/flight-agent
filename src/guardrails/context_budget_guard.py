@@ -20,6 +20,7 @@ from src.guardrails.layered_context import (
     CompactLayeredContextState,
     build_layered_context_state,
     has_compressible_history,
+    partition_messages_for_compaction,
 )
 from src.runtime import Context
 
@@ -28,6 +29,7 @@ DEFAULT_MAX_FRACTION = 0.85
 DEFAULT_CHARS_PER_TOKEN = 4
 DEFAULT_LEDGER_FRACTION = 0.25
 DEFAULT_MIN_LEDGER_BUDGET_CHARS = 12000
+DEFAULT_RAW_RECENT_TURNS = 2
 
 
 class ContextBudgetGuard(AgentMiddleware):
@@ -43,6 +45,7 @@ class ContextBudgetGuard(AgentMiddleware):
         chars_per_token: int = DEFAULT_CHARS_PER_TOKEN,
         ledger_fraction: float = DEFAULT_LEDGER_FRACTION,
         min_ledger_budget_chars: int = DEFAULT_MIN_LEDGER_BUDGET_CHARS,
+        raw_recent_turns: int = DEFAULT_RAW_RECENT_TURNS,
         max_tool_facts: int | None = None,
     ) -> None:
         self.context_window_tokens = context_window_tokens
@@ -50,6 +53,7 @@ class ContextBudgetGuard(AgentMiddleware):
         self.chars_per_token = chars_per_token
         self.ledger_fraction = ledger_fraction
         self.min_ledger_budget_chars = min_ledger_budget_chars
+        self.raw_recent_turns = raw_recent_turns
         self.max_tool_facts = max_tool_facts
 
     def wrap_model_call(
@@ -73,12 +77,19 @@ class ContextBudgetGuard(AgentMiddleware):
         threshold = self.context_window_tokens * self.chars_per_token * self.max_fraction
         if estimate <= threshold or not has_compressible_history(request.messages):
             return request
-        layered_state = build_layered_context_state(
+        compressed_messages, raw_messages = partition_messages_for_compaction(
             request.messages,
+            raw_recent_turns=self.raw_recent_turns,
+        )
+        if not compressed_messages:
+            return request
+        layered_state = build_layered_context_state(
+            compressed_messages,
             budget_chars=max(
                 round(threshold * self.ledger_fraction),
                 self.min_ledger_budget_chars,
             ),
+            preserve_latest_user_message=False,
         )
 
         latest_human_text = _latest_human_text(request.messages)
@@ -88,9 +99,7 @@ class ContextBudgetGuard(AgentMiddleware):
             estimate_chars=estimate,
             threshold_chars=round(threshold),
         )
-        recent_messages = _recent_messages_after_last_tool(request.messages)
-        if not _has_human_message(recent_messages):
-            recent_messages = [HumanMessage(content=latest_human_text)]
+        recent_messages = raw_messages or [HumanMessage(content=latest_human_text)]
         compact_request = request.override(
             messages=[*ledger_messages, *recent_messages],
         )
@@ -100,6 +109,7 @@ class ContextBudgetGuard(AgentMiddleware):
             threshold_chars=round(threshold),
             ledger=layered_state,
             compacted_message_count=len(compact_request.messages),
+            raw_message_count=len(recent_messages),
         )
         return compact_request
 
@@ -175,14 +185,6 @@ def _synthetic_ledger_tool_call_id(ledger: CompactLayeredContextState) -> str:
     return f"context_ledger_{digest}"
 
 
-def _recent_messages_after_last_tool(messages: list[Any]) -> list[Any]:
-    """Keep the current working edge after old tool observations are summarized."""
-    for index in range(len(messages) - 1, -1, -1):
-        if str(getattr(messages[index], "type", "")) == "tool":
-            return list(messages[index + 1 :])
-    return list(messages[-1:])
-
-
 def _log_context_budget_compacted(
     request: ModelRequest,
     *,
@@ -190,6 +192,7 @@ def _log_context_budget_compacted(
     threshold_chars: int,
     ledger: CompactLayeredContextState,
     compacted_message_count: int,
+    raw_message_count: int,
 ) -> None:
     log_event(
         "react_context_budget_compacted",
@@ -211,6 +214,7 @@ def _log_context_budget_compacted(
         compacted_request_chars=len(ledger.to_prompt_text()),
         original_message_count=len(request.messages),
         compacted_message_count=compacted_message_count,
+        raw_message_count=raw_message_count,
         original_tool_count=len(request.tools),
         compacted_tool_count=len(request.tools),
         compaction_mode=ledger.strategy,

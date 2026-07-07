@@ -27,20 +27,23 @@ queried part of the range, forced final-answer compaction could correctly avoid
 fabricating missing results, but it could not continue the remaining work.
 
 ## Decision
-Use state-preserving context compaction as the default context-budget behavior.
+Use turn-aware, state-preserving context compaction as the default
+context-budget behavior.
 
 When the request approaches the configured context budget, the agent now:
 
-1. Builds a compact observation ledger from historical tool results.
-2. Replaces old verbose history with a compact state summary.
-3. Preserves the original system prompt.
-4. Preserves available tools and the original tool choice.
-5. Preserves the current working edge after the most recent tool result.
-6. Lets the ReAct workflow continue from the compressed state.
+1. Splits the message history on user-turn boundaries.
+2. Compresses older turns into a layered context state.
+3. Injects that state as a protocol-valid synthetic tool observation.
+4. Preserves the original system prompt outside the compacted state.
+5. Preserves the latest user turn and a small number of recent turns as raw
+   messages.
+6. Preserves available tools and the original tool choice.
+7. Lets the ReAct workflow continue from the compressed state.
 
-The compaction prompt explicitly says it is a historical state summary, not a
-final-answer instruction. The model may continue calling tools when the ledger
-does not cover the user's current request.
+The compacted observation explicitly says it is historical working state, not a
+final-answer instruction. The model may continue calling tools when the compact
+state does not cover the user's current request.
 
 ## Design
 
@@ -56,10 +59,52 @@ Compaction triggers when:
 
 - estimated request size exceeds the configured context threshold, currently
   `85%` of the model context window, and
-- historical tool results exist.
+- the history contains compressible messages beyond the latest user message.
 
-If there are no tool results, the guard does not compact because there is no
-tool-backed state to preserve in an observation ledger.
+If the only message is the latest user request, the guard does not compact
+because there is no historical state to preserve.
+
+### Turn-Aware Partitioning
+Before building the compact state, the guard partitions messages into:
+
+- a compressed prefix, containing older turns; and
+- a raw suffix, containing the most recent user turns.
+
+A turn starts at a `HumanMessage` and includes following assistant/tool messages
+until the next `HumanMessage`. By default, the guard keeps the latest two user
+turns raw and compresses older turns. This avoids the earlier bug where the same
+recent assistant/tool messages could appear both in the compacted ledger and as
+raw messages.
+
+For single-user-turn histories, the latest `HumanMessage` is kept raw, while the
+execution messages after that user request can still be compressed. This handles
+long one-shot ReAct workflows such as "query many dates and then summarize".
+
+### Layered Context State
+The compressed prefix is represented as a generic layered context state with
+three layers:
+
+1. historical user messages;
+2. assistant visible execution state; and
+3. tool observations.
+
+The original system prompt is never moved into the compact state. The latest raw
+user message is also kept outside the compact state.
+
+Historical user messages are stored as compact cards containing:
+
+- source message index
+- role
+- visible text summary
+- original character count
+- content hash
+- truncation flag
+
+Assistant messages are stored similarly, but only visible assistant content is
+included. Reasoning blocks are deliberately excluded from the compact state.
+Assistant tool-call requests are kept as structured metadata so the model can
+see which actions were attempted without preserving long natural-language
+assistant text.
 
 ### Observation Ledger
 Historical `ToolMessage` objects are converted into generic observation cards.
@@ -80,14 +125,18 @@ structure and generic statistics such as array lengths, numeric min/max values,
 short string samples, null paths, and boolean counts.
 
 ### Budgeting Strategy
-The compactor tries to preserve one observation card per completed tool call.
+The layered compactor first budgets the tool-observation ledger, then keeps
+historical user and assistant cards when space allows.
 
 The fallback order is:
 
-1. Preserve all observation cards with previews.
-2. Trim previews and keep shape/stat summaries.
-3. Drop the oldest observation cards only if the compact ledger is still too
-   large.
+1. Preserve all tool observation cards with previews.
+2. Trim tool previews and keep shape/stat summaries.
+3. Trim historical user and assistant visible-text previews.
+4. Drop older assistant cards if the layered state is still too large.
+5. Drop older historical user cards if needed.
+6. Drop the oldest observation cards only when the compact tool ledger itself is
+   still too large.
 
 This avoids the earlier "keep only the latest N facts" behavior. A 10-day or
 20-day batch query should still show that each successful tool call happened,
@@ -100,8 +149,27 @@ After compaction, the request keeps the original execution surface:
 system_prompt: original system prompt
 
 messages:
-  1. SystemMessage: compacted historical working state + observation ledger
-  2. recent messages after the latest ToolMessage
+  1. AIMessage: synthetic tool call to context_observation_ledger
+  2. ToolMessage: layered compact state for compressed older turns
+  3. raw recent turn messages
+
+tools: original tools
+tool_choice: original tool_choice
+```
+
+The synthetic tool observation is protocol-valid: the injected `ToolMessage`
+always has a matching preceding `AIMessage.tool_calls[].id`. The guard does not
+insert an orphan `ToolMessage` directly into the message list.
+
+Example shape:
+
+```text
+AIMessage(tool_calls=[context_observation_ledger])
+ToolMessage(tool_call_id=same id, content=layered compact state)
+HumanMessage(...)
+AIMessage(...)
+ToolMessage(...)
+HumanMessage(latest user request)
 
 tools: original tools
 tool_choice: original tool_choice
@@ -128,12 +196,20 @@ The event now represents state-preserving compaction rather than forced
 final-answer fallback. It records:
 
 - `compaction_mode="state_preserving"`
+- `compaction_mode="layered_context_state"` for the current implementation
 - `estimate_chars`
 - `threshold_chars`
 - `observation_count`
 - `preserved_observation_count`
 - `dropped_observation_count`
 - `preview_truncated_count`
+- `old_user_message_count`
+- `preserved_old_user_message_count`
+- `dropped_old_user_message_count`
+- `assistant_message_count`
+- `preserved_assistant_message_count`
+- `dropped_assistant_message_count`
+- `raw_message_count`
 - `compacted_request_chars`
 - `original_message_count`
 - `compacted_message_count`
@@ -173,6 +249,20 @@ Cons:
 
 Rejected because batch factual retrieval needs broad coverage, not only recency.
 
+### Compress Everything and Re-Append the Tail After the Last Tool
+Pros:
+- Easy to implement.
+- Preserves the latest visible working edge after a tool result.
+
+Cons:
+- Can duplicate recent assistant/tool messages: once inside the compact ledger
+  and once as raw messages.
+- Does not align with user-turn boundaries.
+- Can still exceed budget if the post-tool tail is large.
+
+Rejected after implementation review. The current approach partitions by human
+turns before compaction, then compresses only the older prefix.
+
 ### Domain-Specific Summary
 Pros:
 - Could create more compact summaries for airfare-specific data such as date,
@@ -192,6 +282,9 @@ added later inside specific tools or providers if needed.
   answer prematurely.
 - Tools remain available after compaction.
 - The compressed prompt is less likely to lose successful historical tool calls.
+- Recent user turns can remain raw while older turns are compressed.
+- The same recent raw messages are no longer duplicated inside the compact
+  ledger.
 - The model gets explicit guidance not to repeat identical successful calls.
 - The guardrail remains generic and does not depend on air-ticket fields.
 - State compaction is now a memory-management behavior, not a final-answer
@@ -202,8 +295,8 @@ added later inside specific tools or providers if needed.
 - There is not yet a second-level hard fallback if the state-preserving compacted
   request is still too large.
 - The ledger uses character-based budgeting, not tokenizer-level accounting.
-- The recent-message retention rule keeps messages after the latest tool result;
-  more nuanced retention may be needed for complex multi-branch workflows.
+- The recent-turn retention rule currently keeps a fixed number of recent user
+  turns raw. A future version may adapt this count based on remaining budget.
 - Observation previews are lossy by design. If a final answer needs full raw tool
   output that was trimmed, the agent may need to call a tool again or explain the
   missing detail.

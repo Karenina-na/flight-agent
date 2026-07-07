@@ -127,9 +127,10 @@ def build_layered_context_state(
     *,
     budget_chars: int,
     message_preview_chars: int = DEFAULT_MESSAGE_PREVIEW_CHARS,
+    preserve_latest_user_message: bool = True,
 ) -> CompactLayeredContextState:
     """Build a generic layered summary from historical ReAct messages."""
-    latest_human_index = _latest_human_index(messages)
+    latest_human_index = _latest_human_index(messages) if preserve_latest_user_message else None
     old_user_cards = _message_cards(
         messages,
         role="human",
@@ -207,6 +208,31 @@ def has_compressible_history(messages: list[Any]) -> bool:
     return any(index != latest_human_index for index, _ in enumerate(messages))
 
 
+def partition_messages_for_compaction(
+    messages: list[Any],
+    *,
+    raw_recent_turns: int = 2,
+) -> tuple[list[Any], list[Any]]:
+    """Split messages into a compressed prefix and raw recent human turns."""
+    starts = _human_message_indexes(messages)
+    if len(starts) <= 1:
+        latest_human_index = starts[-1] if starts else None
+        if latest_human_index is None:
+            return list(messages), []
+        compressed = [
+            message
+            for index, message in enumerate(messages)
+            if index != latest_human_index
+        ]
+        return compressed, [messages[latest_human_index]]
+    if raw_recent_turns <= 0:
+        return list(messages), []
+    if len(starts) <= raw_recent_turns:
+        return [], list(messages)
+    raw_start = starts[-raw_recent_turns]
+    return list(messages[:raw_start]), list(messages[raw_start:])
+
+
 def _state_from_cards(
     *,
     budget_chars: int,
@@ -273,6 +299,14 @@ def _latest_human_index(messages: list[Any]) -> int | None:
     return None
 
 
+def _human_message_indexes(messages: list[Any]) -> list[int]:
+    return [
+        index
+        for index, message in enumerate(messages)
+        if str(getattr(message, "type", "")) == "human"
+    ]
+
+
 def _visible_content_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -332,4 +366,5 @@ __all__ = [
     "MessageLayerCard",
     "build_layered_context_state",
     "has_compressible_history",
+    "partition_messages_for_compaction",
 ]
