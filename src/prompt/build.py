@@ -3,12 +3,10 @@
 from collections.abc import Iterable
 from typing import Any
 
+from src.mcp.capabilities import build_mcp_prompt
 from src.prompt.base import CORE_PROMPT, DOMAIN_PROMPT
-from src.prompt.capabilities import (
-    build_mcp_prompt,
-    build_skill_prompt,
-    build_tool_prompt,
-)
+from src.skills.capabilities import build_skill_prompt
+from src.tools.capabilities import build_tool_prompt
 
 
 def build_system_prompt(

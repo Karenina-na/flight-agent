@@ -8,6 +8,7 @@ from langchain.messages import SystemMessage
 from langchain.tools import ToolRuntime, tool
 
 from src.observability.events import log_event
+from src.prompt import build_memory_prompt_addendum
 from src.runtime import Context
 
 
@@ -44,12 +45,7 @@ class MemoryMiddleware(AgentMiddleware):
         )
 
     def _build_prompt_addendum(self) -> str:
-        return (
-            "\n\n## Long-Term Memory\n\n"
-            "可以按需使用 remember_user_fact(key, value) 保存稳定的用户偏好、"
-            "项目背景或后续对话仍有价值的信息；需要回忆时调用 "
-            "recall_user_facts()。只保存用户明确表达或对任务持续有用的信息。"
-        )
+        return build_memory_prompt_addendum()
 
     def _build_tools(self) -> list[Any]:
         @tool

@@ -8,6 +8,7 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 from langchain.messages import SystemMessage
 from langchain.tools import ToolRuntime, tool
 
+from src.prompt import build_skill_prompt_addendum
 from src.runtime import Context
 from src.skills.catalog import SkillCatalog
 from src.skills.loader import load_skills_from_dir
@@ -57,15 +58,7 @@ class SkillMiddleware(AgentMiddleware):
         )
 
     def _build_prompt_addendum(self) -> str:
-        return (
-            "\n\n## Available Skills\n\n"
-            f"{self.catalog.build_prompt_catalog()}\n\n"
-            "Skill 使用规则：\n"
-            "- 先阅读上面的名称和描述，判断是否需要技能。\n"
-            "- 需要完整说明时，调用 load_skill(skill_name)。\n"
-            "- 需要附属文件时，先调用 list_skill_files(skill_name)，"
-            "再调用 read_skill_file(skill_name, relative_path)。"
-        )
+        return build_skill_prompt_addendum(self.catalog.build_prompt_catalog())
 
     def _build_tools(self) -> list[Any]:
         @tool

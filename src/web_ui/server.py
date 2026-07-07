@@ -157,7 +157,7 @@ def run_web_ui(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     app = WebApp()
     handler_class = build_handler(app)
     server = ThreadingHTTPServer((host, port), handler_class)
-    print(f"机票事实查询 Web UI: http://{host}:{port}")
+    print(f"Web UI: http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

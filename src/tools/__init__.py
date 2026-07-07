@@ -7,11 +7,12 @@ registered tools without depending on individual tool modules.
 from importlib import import_module
 from pkgutil import iter_modules
 
+from src.tools.capabilities import TOOL_USE_PROMPT, build_tool_prompt
 from src.tools.registry import clear_tools_for_test, get_tools as _get_registered_tools
 from src.tools.registry import register_tool
 
 _DISCOVERED = False
-_SKIPPED_MODULES = {"registry", "tools"}
+_SKIPPED_MODULES = {"capabilities", "registry", "tools"}
 
 
 def _discover_tools() -> None:
@@ -35,4 +36,10 @@ def get_tools():
     return _get_registered_tools()
 
 
-__all__ = ["clear_tools_for_test", "get_tools", "register_tool"]
+__all__ = [
+    "TOOL_USE_PROMPT",
+    "build_tool_prompt",
+    "clear_tools_for_test",
+    "get_tools",
+    "register_tool",
+]

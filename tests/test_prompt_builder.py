@@ -1,12 +1,16 @@
 from src.prompt import (
     CORE_PROMPT,
+    CONTEXT_COMPACTION_SYSTEM_PROMPT,
     DOMAIN_PROMPT,
+    build_context_compaction_system_prompt,
+    build_context_compaction_user_prompt,
+    build_memory_prompt_addendum,
+    build_skill_prompt_addendum,
     build_system_prompt,
-    build_tool_prompt,
 )
 from src.prompt.build import build_system_prompt as build_system_prompt_from_module
-from src.prompt.capabilities import build_tool_prompt as build_tool_prompt_from_module
-from src.tools import get_tools
+from src.tools import build_tool_prompt, get_tools
+from src.tools.capabilities import build_tool_prompt as build_tool_prompt_from_module
 
 
 def test_base_prompt_layers_do_not_name_concrete_tools():
@@ -48,7 +52,7 @@ def test_tool_layer_is_generated_from_registered_tools():
     assert '"flight_number":"CA981"' in tool_prompt
 
 
-def test_prompt_package_exposes_build_modules():
+def test_prompt_package_exposes_large_prompt_build_modules():
     assert build_system_prompt_from_module is build_system_prompt
     assert build_tool_prompt_from_module is build_tool_prompt
 
@@ -62,3 +66,31 @@ def test_system_prompt_combines_layers():
     assert "search_airfare_quotes" in system_prompt
     assert "query_flight_information" in system_prompt
     assert "query_current_date" in system_prompt
+
+
+def test_context_budget_prompts_live_in_prompt_package():
+    class FakeLedger:
+        def to_prompt_text(self) -> str:
+            return '{"observation_count": 1}'
+
+    assert build_context_compaction_system_prompt() == CONTEXT_COMPACTION_SYSTEM_PROMPT
+    prompt = build_context_compaction_user_prompt(
+        original_user_message="请汇总",
+        ledger=FakeLedger(),
+        estimate_chars=100,
+        threshold_chars=80,
+    )
+
+    assert "不要再调用工具" in prompt
+    assert "工具观察账本" in prompt
+    assert '{"observation_count": 1}' in prompt
+    assert "原请求估算 100 chars" in prompt
+
+
+def test_middleware_prompt_addenda_live_in_prompt_package():
+    assert "## Long-Term Memory" in build_memory_prompt_addendum()
+    assert "remember_user_fact(key, value)" in build_memory_prompt_addendum()
+    skill_addendum = build_skill_prompt_addendum("- concise-writer: Writes concise answers")
+    assert "## Available Skills" in skill_addendum
+    assert "- concise-writer: Writes concise answers" in skill_addendum
+    assert "load_skill(skill_name)" in skill_addendum
