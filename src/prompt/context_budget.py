@@ -46,7 +46,8 @@ def build_context_ledger_tool_observation(
     return (
         "## 压缩后的历史工作状态\n\n"
         f"最近用户目标：{original_user_message}\n\n"
-        "以下是已完成工具调用的工具观察账本。每条 observation 的 args 是实际调用参数，"
+        "以下是压缩后的分层历史状态，包含历史用户消息摘要、assistant 可见执行状态摘要、"
+        "以及已完成工具调用的工具观察账本。每条 tool observation 的 args 是实际调用参数，"
         "result_shape/result_stats/result_preview 是工具结果的通用摘要。\n"
         f"{ledger.to_prompt_text()}\n\n"
         "继续执行要求：\n"

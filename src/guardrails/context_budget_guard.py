@@ -16,10 +16,10 @@ from src.prompt import (
     build_context_ledger_tool_call_args,
     build_context_ledger_tool_observation,
 )
-from src.guardrails.tool_observation import (
-    CompactObservationLedger,
-    build_tool_observations,
-    compact_tool_observations,
+from src.guardrails.layered_context import (
+    CompactLayeredContextState,
+    build_layered_context_state,
+    has_compressible_history,
 )
 from src.runtime import Context
 
@@ -71,11 +71,10 @@ class ContextBudgetGuard(AgentMiddleware):
     def _guarded_request(self, request: ModelRequest) -> ModelRequest:
         estimate = _request_size_estimate(request)
         threshold = self.context_window_tokens * self.chars_per_token * self.max_fraction
-        observations = build_tool_observations(request.messages)
-        if estimate <= threshold or not observations:
+        if estimate <= threshold or not has_compressible_history(request.messages):
             return request
-        ledger = compact_tool_observations(
-            observations,
+        layered_state = build_layered_context_state(
+            request.messages,
             budget_chars=max(
                 round(threshold * self.ledger_fraction),
                 self.min_ledger_budget_chars,
@@ -85,7 +84,7 @@ class ContextBudgetGuard(AgentMiddleware):
         latest_human_text = _latest_human_text(request.messages)
         ledger_messages = _synthetic_ledger_messages(
             latest_human_text=latest_human_text,
-            ledger=ledger,
+            ledger=layered_state,
             estimate_chars=estimate,
             threshold_chars=round(threshold),
         )
@@ -99,7 +98,7 @@ class ContextBudgetGuard(AgentMiddleware):
             request,
             estimate_chars=estimate,
             threshold_chars=round(threshold),
-            ledger=ledger,
+            ledger=layered_state,
             compacted_message_count=len(compact_request.messages),
         )
         return compact_request
@@ -136,7 +135,7 @@ def _has_human_message(messages: list[Any]) -> bool:
 def _synthetic_ledger_messages(
     *,
     latest_human_text: str,
-    ledger: CompactObservationLedger,
+    ledger: CompactLayeredContextState,
     estimate_chars: int,
     threshold_chars: int,
 ) -> list[Any]:
@@ -171,7 +170,7 @@ def _synthetic_ledger_messages(
     ]
 
 
-def _synthetic_ledger_tool_call_id(ledger: CompactObservationLedger) -> str:
+def _synthetic_ledger_tool_call_id(ledger: CompactLayeredContextState) -> str:
     digest = sha256(ledger.to_prompt_text().encode("utf-8")).hexdigest()[:16]
     return f"context_ledger_{digest}"
 
@@ -189,7 +188,7 @@ def _log_context_budget_compacted(
     *,
     estimate_chars: int,
     threshold_chars: int,
-    ledger: CompactObservationLedger,
+    ledger: CompactLayeredContextState,
     compacted_message_count: int,
 ) -> None:
     log_event(
@@ -203,12 +202,18 @@ def _log_context_budget_compacted(
         preserved_observation_count=ledger.preserved_observation_count,
         dropped_observation_count=ledger.dropped_observation_count,
         preview_truncated_count=ledger.preview_truncated_count,
+        old_user_message_count=ledger.old_user_message_count,
+        preserved_old_user_message_count=ledger.preserved_old_user_message_count,
+        dropped_old_user_message_count=ledger.dropped_old_user_message_count,
+        assistant_message_count=ledger.assistant_message_count,
+        preserved_assistant_message_count=ledger.preserved_assistant_message_count,
+        dropped_assistant_message_count=ledger.dropped_assistant_message_count,
         compacted_request_chars=len(ledger.to_prompt_text()),
         original_message_count=len(request.messages),
         compacted_message_count=compacted_message_count,
         original_tool_count=len(request.tools),
         compacted_tool_count=len(request.tools),
-        compaction_mode="state_preserving",
+        compaction_mode=ledger.strategy,
         compacted_prompt_sha256=sha256(
             _latest_human_text(request.messages).encode("utf-8")
         ).hexdigest(),
