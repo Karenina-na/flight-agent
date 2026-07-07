@@ -185,6 +185,7 @@ def test_demo_message_matches_air_ticket_mvp():
 def test_main_page_left_sidebar_is_minimal_and_demo_fills_input_only():
     assert "快捷操作" in INDEX_HTML
     assert "运行示例" in INDEX_HTML
+    assert "压缩压力示例" in INDEX_HTML
     assert "新建会话" in INDEX_HTML
     assert "能力范围" not in INDEX_HTML
     assert "示例问题" not in INDEX_HTML
@@ -196,7 +197,12 @@ def test_main_page_left_sidebar_is_minimal_and_demo_fills_input_only():
     assert 'fetch("/api/tools")' not in INDEX_HTML
     assert 'postJson("/api/demo")' not in INDEX_HTML
     assert "inputEl.value = DEMO_PROMPT" in INDEX_HTML
+    assert "inputEl.value = COMPRESSION_STRESS_PROMPT" in INDEX_HTML
     assert "const DEMO_PROMPT" in INDEX_HTML
+    assert "const COMPRESSION_STRESS_PROMPT" in INDEX_HTML
+    assert "16K 上下文压力" in INDEX_HTML
+    assert "连续查询接下来 12 天" in INDEX_HTML
+    assert "4 条航线" in INDEX_HTML
 
 
 def test_main_page_keeps_debug_sidebar_lightweight():

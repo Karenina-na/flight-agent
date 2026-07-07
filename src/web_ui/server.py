@@ -815,6 +815,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="actions">
           <button class="primary" id="newBtn" type="button">新建会话</button>
           <button id="demoBtn" type="button">运行示例</button>
+          <button id="compressionDemoBtn" type="button">压缩压力示例</button>
         </div>
       </div>
     </aside>
@@ -867,6 +868,7 @@ INDEX_HTML = r"""<!doctype html>
     const formEl = document.querySelector("#chatForm");
     const sendBtn = document.querySelector("#sendBtn");
     const demoBtn = document.querySelector("#demoBtn");
+    const compressionDemoBtn = document.querySelector("#compressionDemoBtn");
     const newBtn = document.querySelector("#newBtn");
     const threadEl = document.querySelector("#threadId");
     const statusEl = document.querySelector("#lastStatus");
@@ -885,6 +887,17 @@ INDEX_HTML = r"""<!doctype html>
     const toolErrorCountEl = document.querySelector("#toolErrorCount");
     const debugWarningsEl = document.querySelector("#debugWarnings");
     const DEMO_PROMPT = "请查询北京到上海在 2026-07-10 的机票报价样本，并说明查到的事实、信息出处、查询时间和数据限制。";
+    const COMPRESSION_STRESS_PROMPT = [
+      "请执行一个会触发 16K 上下文压力的复杂机票事实任务：",
+      "1. 以 2026-07-10 为第一天，连续查询接下来 12 天的北京到上海机票报价样本。",
+      "2. 每一天都需要分别查询北京到上海、上海到北京、北京到广州、广州到北京这 4 条航线。",
+      "3. 每次查询都保留出发地、目的地、日期、报价条数、最低价、最高价、出处、查询时间和 limitations。",
+      "4. 查询过程中如果某天或某条航线返回空结果，也要记录为空结果，不要跳过。",
+      "5. 最后汇总一份报告：按日期分组列出每条航线的报价事实，说明哪些工具调用成功、哪些结果为空、哪些信息不足。",
+      "6. 如果上下文被压缩，请继续基于已完成的工具观察账本推进，不要误称已经成功调用过的日期没有查询。",
+      "7. 不要做价格合理性、违规、审计通过等判断，只说明事实、出处、时间和限制。",
+      "请尽可能完整执行，不要只给计划。",
+    ].join("\\n");
     let isSending = false;
     let currentMessages = [];
 
@@ -1405,6 +1418,7 @@ INDEX_HTML = r"""<!doctype html>
       isSending = value;
       sendBtn.disabled = value;
       demoBtn.disabled = value;
+      compressionDemoBtn.disabled = value;
       newBtn.disabled = value;
       sendBtn.textContent = value ? "查询中..." : "发送";
     }
@@ -1430,6 +1444,12 @@ INDEX_HTML = r"""<!doctype html>
     demoBtn.addEventListener("click", async () => {
       if (isSending) return;
       inputEl.value = DEMO_PROMPT;
+      inputEl.focus();
+    });
+
+    compressionDemoBtn.addEventListener("click", async () => {
+      if (isSending) return;
+      inputEl.value = COMPRESSION_STRESS_PROMPT;
       inputEl.focus();
     });
 

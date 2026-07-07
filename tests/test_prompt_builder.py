@@ -1,9 +1,9 @@
 from src.prompt import (
     CORE_PROMPT,
-    CONTEXT_COMPACTION_SYSTEM_PROMPT,
+    CONTEXT_LEDGER_TOOL_NAME,
     DOMAIN_PROMPT,
-    build_context_compaction_system_prompt,
-    build_context_compaction_user_prompt,
+    build_context_ledger_tool_call_args,
+    build_context_ledger_tool_observation,
     build_memory_prompt_addendum,
     build_skill_prompt_addendum,
     build_system_prompt,
@@ -73,15 +73,22 @@ def test_context_budget_prompts_live_in_prompt_package():
         def to_prompt_text(self) -> str:
             return '{"observation_count": 1}'
 
-    assert build_context_compaction_system_prompt() == CONTEXT_COMPACTION_SYSTEM_PROMPT
-    prompt = build_context_compaction_user_prompt(
+    assert CONTEXT_LEDGER_TOOL_NAME == "context_observation_ledger"
+    tool_args = build_context_ledger_tool_call_args(
+        original_user_message="请汇总",
+        estimate_chars=100,
+        threshold_chars=80,
+    )
+    prompt = build_context_ledger_tool_observation(
         original_user_message="请汇总",
         ledger=FakeLedger(),
         estimate_chars=100,
         threshold_chars=80,
     )
 
-    assert "这是历史状态摘要，不是最终回答指令" in prompt
+    assert tool_args["reason"] == "context_budget_compaction"
+    assert tool_args["latest_user_goal"] == "请汇总"
+    assert "这是历史工具观察，不是最终回答指令" in prompt
     assert "必要时仍可调用可用工具" in prompt
     assert "工具观察账本" in prompt
     assert '{"observation_count": 1}' in prompt

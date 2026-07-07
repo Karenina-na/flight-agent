@@ -68,18 +68,34 @@ class CompactObservationLedger:
 def build_tool_observations(messages: list[Any]) -> list[ToolObservation]:
     """Build generic observation cards from completed tool messages."""
     observations: list[ToolObservation] = []
+    tool_call_args_by_id: dict[str, dict[str, Any]] = {}
+    tool_call_names_by_id: dict[str, str] = {}
     for message in messages:
+        for tool_call in getattr(message, "tool_calls", None) or []:
+            if not isinstance(tool_call, dict):
+                continue
+            tool_call_id = str(tool_call.get("id") or "")
+            if not tool_call_id:
+                continue
+            args = tool_call.get("args")
+            if isinstance(args, dict):
+                tool_call_args_by_id[tool_call_id] = args
+            name = str(tool_call.get("name") or "")
+            if name:
+                tool_call_names_by_id[tool_call_id] = name
+
         if str(getattr(message, "type", "")) != "tool":
             continue
+        tool_call_id = str(getattr(message, "tool_call_id", "") or "")
         content = getattr(message, "content", "")
         content_text = _content_text(content)
         parsed = _parse_json(content)
         result_value: Any = parsed if parsed is not None else content_text
         observations.append(
             ToolObservation(
-                tool_name=str(getattr(message, "name", "") or "tool"),
-                tool_call_id=str(getattr(message, "tool_call_id", "") or ""),
-                args=_infer_args(result_value),
+                tool_name=str(getattr(message, "name", "") or tool_call_names_by_id.get(tool_call_id) or "tool"),
+                tool_call_id=tool_call_id,
+                args=tool_call_args_by_id.get(tool_call_id) or _infer_args(result_value),
                 status=str(getattr(message, "status", "success") or "success"),
                 result_shape=json_shape_summary(result_value),
                 result_preview=_truncate(_preview_text(result_value), DEFAULT_PREVIEW_CHARS),

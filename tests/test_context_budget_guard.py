@@ -1,13 +1,13 @@
 from types import SimpleNamespace
 
 from langchain.agents.middleware import ModelRequest, ModelResponse
-from langchain.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
 from src.guardrails import ContextBudgetGuard
 from src.guardrails.context_budget_guard import _request_size_estimate
 from src.observability.model_trace import model_request_trace_chars
-from src.prompt import build_system_prompt
+from src.prompt import CONTEXT_LEDGER_TOOL_NAME, build_system_prompt
 from src.runtime import Context
 from src.tools import get_tools
 
@@ -56,6 +56,20 @@ def _quote_payload(departure_date: str, low: int, high: int) -> str:
         f'{{"price":{high},"currency":"CNY"}}],'
         '"limitations":["sample only"]}'
     )
+
+
+def _ledger_messages(messages: list) -> tuple[AIMessage, ToolMessage]:
+    assert len(messages) >= 2
+    ai_message = messages[0]
+    tool_message = messages[1]
+    assert isinstance(ai_message, AIMessage)
+    assert isinstance(tool_message, ToolMessage)
+    assert len(ai_message.tool_calls) == 1
+    tool_call = ai_message.tool_calls[0]
+    assert tool_call["name"] == CONTEXT_LEDGER_TOOL_NAME
+    assert tool_message.name == CONTEXT_LEDGER_TOOL_NAME
+    assert tool_message.tool_call_id == tool_call["id"]
+    return ai_message, tool_message
 
 
 def test_context_budget_guard_passes_through_small_requests():
@@ -147,10 +161,14 @@ def test_context_budget_guard_compacts_large_react_context_and_preserves_tools()
     assert compact_request is not request
     assert compact_request.tools == request.tools
     assert compact_request.tool_choice == request.tool_choice
-    assert len(compact_request.messages) == 1
-    assert isinstance(compact_request.messages[0], SystemMessage)
-    compact_prompt = compact_request.messages[0].content
-    assert "这是历史状态摘要，不是最终回答指令" in compact_prompt
+    assert len(compact_request.messages) == 3
+    ai_message, tool_message = _ledger_messages(compact_request.messages)
+    assert ai_message.tool_calls[0]["args"]["reason"] == "context_budget_compaction"
+    assert ai_message.tool_calls[0]["args"]["latest_user_goal"] == "查询未来10天的票价，然后给出一个建议"
+    assert isinstance(compact_request.messages[2], HumanMessage)
+    assert compact_request.messages[2].content == "查询未来10天的票价，然后给出一个建议"
+    compact_prompt = tool_message.content
+    assert "这是历史工具观察，不是最终回答指令" in compact_prompt
     assert "必要时仍可调用可用工具" in compact_prompt
     assert "查询未来10天的票价" in compact_prompt
     assert "2026-07-08" in compact_prompt
@@ -199,9 +217,9 @@ def test_context_budget_guard_compacts_web_41e6d813_like_request():
     compact_request = seen_requests[0]
     assert compact_request.tools == tools
     assert compact_request.tool_choice == request.tool_choice
-    assert isinstance(compact_request.messages[0], SystemMessage)
-    compact_prompt = compact_request.messages[0].content
-    assert "这是历史状态摘要，不是最终回答指令" in compact_prompt
+    _, tool_message = _ledger_messages(compact_request.messages)
+    compact_prompt = tool_message.content
+    assert "这是历史工具观察，不是最终回答指令" in compact_prompt
     assert "后一个月" in compact_prompt
     assert "不要编造账本之外的工具结果" in compact_prompt
     assert "dropped_observation_count" in compact_prompt
@@ -209,6 +227,36 @@ def test_context_budget_guard_compacts_web_41e6d813_like_request():
     assert "2026-07-20" in compact_prompt
     assert isinstance(compact_request.messages[-1], HumanMessage)
     assert compact_request.messages[-1].content == "请你查询后一个月每一天的机票，并做一个汇总表格"
+
+
+def test_context_budget_guard_adds_human_query_when_compaction_follows_tool_results():
+    guard = ContextBudgetGuard(context_window_tokens=10, max_fraction=0.10)
+    seen_requests: list[ModelRequest] = []
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        seen_requests.append(request)
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    request = _request(
+        messages=[
+            HumanMessage(content="查询 12 天 4 条航线并汇总"),
+            AIMessage(content="", tool_calls=[]),
+            ToolMessage(
+                content='{"query":{"departure_date":"2026-07-10"},"quotes":[{"price":500}]}',
+                name="search_airfare_quotes",
+                tool_call_id="call-1",
+            ),
+        ],
+        system_prompt="system" * 100,
+        tools=[{"name": "search_airfare_quotes", "description": "tool" * 50}],
+    )
+
+    guard.wrap_model_call(request, handler)
+
+    compact_request = seen_requests[0]
+    assert [message.type for message in compact_request.messages] == ["ai", "tool", "human"]
+    _ledger_messages(compact_request.messages)
+    assert compact_request.messages[2].content == "查询 12 天 4 条航线并汇总"
 
 
 def test_context_budget_guard_keeps_each_tool_observation_card_instead_of_recent_only():
@@ -247,7 +295,8 @@ def test_context_budget_guard_keeps_each_tool_observation_card_instead_of_recent
 
     guard.wrap_model_call(request, handler)
 
-    compact_prompt = seen_requests[0].messages[0].content
+    _, tool_message = _ledger_messages(seen_requests[0].messages)
+    compact_prompt = tool_message.content
     assert "工具观察账本" in compact_prompt
     assert "call-1" in compact_prompt
     assert "call-2" in compact_prompt
@@ -283,7 +332,8 @@ def test_context_budget_guard_preserves_each_tool_observation_card():
 
     guard.wrap_model_call(request, handler)
 
-    compact_prompt = seen_requests[0].messages[0].content
+    _, tool_message = _ledger_messages(seen_requests[0].messages)
+    compact_prompt = tool_message.content
     assert "工具观察账本" in compact_prompt
     assert "不要重复调用账本中已成功完成且参数相同的工具" in compact_prompt
     for index in range(10):

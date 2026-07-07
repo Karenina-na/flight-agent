@@ -63,17 +63,19 @@ class AirTicketService:
         currency: str = "cny",
         limit: int = 20,
     ) -> AirfareQuoteResponse:
+        normalized_return_date = _normalize_optional_text(return_date)
+        normalized_stops = _normalize_stops(stops)
         try:
             return self.provider.search_airfare_quotes(
                 origin=origin,
                 destination=destination,
                 departure_date=departure_date,
-                return_date=return_date,
+                return_date=normalized_return_date,
                 cabin=cabin,
                 adults=adults,
                 children=children,
                 infants=infants,
-                stops=stops,
+                stops=normalized_stops,
                 currency=currency,
                 limit=limit,
             )
@@ -83,12 +85,12 @@ class AirTicketService:
                     origin=origin,
                     destination=destination,
                     departure_date=departure_date,
-                    return_date=return_date,
+                    return_date=normalized_return_date,
                     cabin=cabin,
                     adults=adults,
                     children=children,
                     infants=infants,
-                    stops=stops,
+                    stops=normalized_stops,
                     currency=currency,
                 ),
                 captured_at=_now_iso(),
@@ -128,3 +130,17 @@ class AirTicketService:
                     f"Air ticket facts are unavailable: {exc}",
                 ),
             )
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _normalize_stops(value: int | str) -> int | str:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else 0
+    return value

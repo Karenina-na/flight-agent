@@ -54,6 +54,21 @@ def test_service_returns_empty_quote_response_when_provider_fails():
     assert "audit" not in response.to_json().lower()
 
 
+def test_service_normalizes_empty_optional_quote_arguments():
+    service = AirTicketService(_settings(), provider_factory=lambda settings: _FakeProvider())
+
+    response = service.search_quotes(
+        origin="北京",
+        destination="上海",
+        departure_date="2026-07-10",
+        return_date="",
+        stops="",
+    )
+
+    assert response.query["return_date"] is None
+    assert response.query["stops"] == 0
+
+
 def test_service_returns_empty_flight_response_when_provider_fails():
     service = AirTicketService(_settings(), provider_factory=lambda settings: _FailingProvider())
 

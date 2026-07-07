@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Awaitable, Callable
 from hashlib import sha256
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain.messages import SystemMessage
+from langchain.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.observability import log_event
 from src.observability.model_trace import model_request_trace_chars
-from src.prompt import build_context_compaction_user_prompt
+from src.prompt import (
+    CONTEXT_LEDGER_TOOL_NAME,
+    build_context_ledger_tool_call_args,
+    build_context_ledger_tool_observation,
+)
 from src.guardrails.tool_observation import (
+    CompactObservationLedger,
     build_tool_observations,
     compact_tool_observations,
 )
@@ -78,17 +82,18 @@ class ContextBudgetGuard(AgentMiddleware):
             ),
         )
 
-        summary_message = SystemMessage(
-            content=build_context_compaction_user_prompt(
-                original_user_message=_latest_human_text(request.messages),
-                ledger=ledger,
-                estimate_chars=estimate,
-                threshold_chars=round(threshold),
-            )
+        latest_human_text = _latest_human_text(request.messages)
+        ledger_messages = _synthetic_ledger_messages(
+            latest_human_text=latest_human_text,
+            ledger=ledger,
+            estimate_chars=estimate,
+            threshold_chars=round(threshold),
         )
         recent_messages = _recent_messages_after_last_tool(request.messages)
+        if not _has_human_message(recent_messages):
+            recent_messages = [HumanMessage(content=latest_human_text)]
         compact_request = request.override(
-            messages=[summary_message, *recent_messages],
+            messages=[*ledger_messages, *recent_messages],
         )
         _log_context_budget_compacted(
             request,
@@ -122,6 +127,53 @@ def _latest_human_text(messages: list[Any]) -> str:
             content = getattr(message, "content", "")
             return str(content)
     return ""
+
+
+def _has_human_message(messages: list[Any]) -> bool:
+    return any(str(getattr(message, "type", "")) == "human" for message in messages)
+
+
+def _synthetic_ledger_messages(
+    *,
+    latest_human_text: str,
+    ledger: CompactObservationLedger,
+    estimate_chars: int,
+    threshold_chars: int,
+) -> list[Any]:
+    """Represent compacted historical state as a protocol-valid tool observation."""
+    tool_call_id = _synthetic_ledger_tool_call_id(ledger)
+    tool_args = build_context_ledger_tool_call_args(
+        original_user_message=latest_human_text,
+        estimate_chars=estimate_chars,
+        threshold_chars=threshold_chars,
+    )
+    return [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": tool_call_id,
+                    "name": CONTEXT_LEDGER_TOOL_NAME,
+                    "args": tool_args,
+                }
+            ],
+        ),
+        ToolMessage(
+            content=build_context_ledger_tool_observation(
+                original_user_message=latest_human_text,
+                ledger=ledger,
+                estimate_chars=estimate_chars,
+                threshold_chars=threshold_chars,
+            ),
+            name=CONTEXT_LEDGER_TOOL_NAME,
+            tool_call_id=tool_call_id,
+        ),
+    ]
+
+
+def _synthetic_ledger_tool_call_id(ledger: CompactObservationLedger) -> str:
+    digest = sha256(ledger.to_prompt_text().encode("utf-8")).hexdigest()[:16]
+    return f"context_ledger_{digest}"
 
 
 def _recent_messages_after_last_tool(messages: list[Any]) -> list[Any]:

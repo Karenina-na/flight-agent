@@ -1,4 +1,4 @@
-from langchain.messages import ToolMessage
+from langchain.messages import AIMessage, ToolMessage
 
 from src.guardrails.tool_observation import (
     build_tool_observations,
@@ -29,6 +29,31 @@ def test_build_tool_observations_records_generic_tool_cards():
     assert observation.result_stats["arrays"]["items"]["length"] == 2
     assert observation.result_stats["numbers"]["items[].score"] == {"min": 3, "max": 7}
     assert observation.content_sha256
+
+
+def test_build_tool_observations_prefers_original_tool_call_args():
+    messages = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "name": "demo_tool",
+                    "args": {"requested_slot": "from-tool-call"},
+                }
+            ],
+        ),
+        ToolMessage(
+            content='{"query":{"requested_slot":"from-result"},"items":[]}',
+            name="demo_tool",
+            tool_call_id="call-1",
+        ),
+    ]
+
+    observations = build_tool_observations(messages)
+
+    assert len(observations) == 1
+    assert observations[0].args == {"requested_slot": "from-tool-call"}
 
 
 def test_json_summaries_do_not_depend_on_business_fields():
@@ -95,4 +120,3 @@ def test_compact_tool_observations_drops_oldest_cards_only_when_budget_is_tiny()
     assert ledger.dropped_observation_count > 0
     assert ledger.observations[0]["tool_call_id"] != "call-0"
     assert "dropped_observation_count" in ledger.to_prompt_text()
-
