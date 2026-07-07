@@ -4,6 +4,7 @@ from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 
 from src.config import load_settings
+from src.guardrails import build_react_duplicate_tool_call_guard
 from src.memory import build_checkpointer, build_memory_middleware, build_store
 from src.observability import configure_logging, build_observability_middleware
 from src.prompt import build_system_prompt
@@ -30,6 +31,7 @@ checkpointer = build_checkpointer(settings.memory.checkpointer)
 store = build_store(settings.memory.store)
 middleware = [
     build_observability_middleware(redact=settings.observability.logging.redact),
+    build_react_duplicate_tool_call_guard(),
     *build_summarization_middleware(
         settings=settings.summarization,
         main_model=model,
