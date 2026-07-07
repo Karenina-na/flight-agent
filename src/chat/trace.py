@@ -457,6 +457,10 @@ def _trace_react_step_nodes(
         if not isinstance(call, dict):
             continue
         call_type_value = call.get("type")
+        if call.get("event") == "react_context_budget_compacted":
+            flush_step()
+            steps.append(_react_compaction_node(turn_id, len(steps) + 1, call))
+            continue
         if call_type_value == "model" and call.get("event") == "model_call_start":
             flush_step()
             step_number = len(steps) + 1
@@ -490,6 +494,32 @@ def _trace_react_step_nodes(
         step["meta"]["stage_count"] = len(step.get("children", []))
         step["meta"]["event_count"] = len(step.pop("_calls", []))
     return steps
+
+
+def _react_compaction_node(
+    turn_id: str,
+    step_number: int,
+    call: dict[str, Any],
+) -> dict[str, Any]:
+    fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+    return {
+        "id": f"{turn_id}:react-compaction-{step_number}",
+        "type": "react_compaction",
+        "label": "Context Compaction",
+        "status": "completed",
+        "meta": {
+            "step_index": step_number - 1,
+            "event_count": 1,
+            "estimate_chars": fields.get("estimate_chars"),
+            "threshold_chars": fields.get("threshold_chars"),
+            "observation_count": fields.get("observation_count"),
+            "preserved_observation_count": fields.get("preserved_observation_count"),
+            "dropped_observation_count": fields.get("dropped_observation_count"),
+            "preview_truncated_count": fields.get("preview_truncated_count"),
+            "compacted_request_chars": fields.get("compacted_request_chars"),
+        },
+        "children": [_trace_event_node(call)],
+    }
 
 
 def _react_stage_node(

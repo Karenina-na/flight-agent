@@ -10,15 +10,23 @@ from src.prompt.capabilities import (
     build_skill_prompt,
     build_tool_prompt,
 )
+from src.prompt.context_budget import (
+    CONTEXT_COMPACTION_SYSTEM_PROMPT,
+    build_context_compaction_system_prompt,
+    build_context_compaction_user_prompt,
+)
 
 __all__ = [
     "CORE_PROMPT",
+    "CONTEXT_COMPACTION_SYSTEM_PROMPT",
     "DOMAIN_PROMPT",
     "MCP_USE_PROMPT",
     "SKILL_USE_PROMPT",
     "SYSTEM_PROMPT",
     "TOOL_USE_PROMPT",
     "build_mcp_prompt",
+    "build_context_compaction_system_prompt",
+    "build_context_compaction_user_prompt",
     "build_skill_prompt",
     "build_system_prompt",
     "build_tool_prompt",

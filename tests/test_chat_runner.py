@@ -337,13 +337,70 @@ def test_execution_step_summaries_pairs_batched_tool_start_and_end_events():
     assert [stage["status"] for stage in steps[0]["stages"]] == [
         "completed",
         "completed",
-        "completed",
     ]
-    assert steps[0]["stages"][1]["details"]["tool_call_id"] == "call-1"
-    assert steps[0]["stages"][1]["details"]["response_preview"] == '{"quotes":[{"price":500}]}'
-    assert steps[0]["stages"][2]["details"]["tool_call_id"] == "call-2"
-    assert steps[0]["stages"][2]["details"]["response_preview"] == '{"quotes":[{"price":420}]}'
+    batch = steps[0]["stages"][1]
+    assert batch["kind"] == "action_batch"
+    assert batch["summary"] == "批量调用 search_airfare_quotes × 2。"
+    assert batch["details"]["tool_count"] == 2
+    assert [item["tool_call_id"] for item in batch["details"]["tools"]] == ["call-1", "call-2"]
+    assert batch["details"]["tools"][0]["response_preview"] == '{"quotes":[{"price":500}]}'
+    assert batch["details"]["tools"][1]["response_preview"] == '{"quotes":[{"price":420}]}'
     assert steps[1]["summary"] == "模型生成最终回复。"
+
+
+def test_execution_step_summaries_exposes_context_compaction_stage():
+    calls = [
+        {
+            "index": 1,
+            "type": "tool",
+            "event": "tool_call_start",
+            "tool_name": "generic_lookup",
+            "tool_call_id": "call-1",
+            "request": {"args": {"slot": 1}},
+        },
+        {
+            "index": 2,
+            "type": "tool",
+            "event": "tool_call_end",
+            "tool_name": "generic_lookup",
+            "tool_call_id": "call-1",
+            "response": {"content": '{"value":1}'},
+        },
+        {
+            "index": 3,
+            "type": "event",
+            "event": "react_context_budget_compacted",
+            "fields": {
+                "estimate_chars": 56000,
+                "threshold_chars": 27853,
+                "observation_count": 10,
+                "preserved_observation_count": 10,
+                "dropped_observation_count": 0,
+                "preview_truncated_count": 4,
+            },
+        },
+        {
+            "index": 4,
+            "type": "model",
+            "event": "model_call_start",
+            "request": {"messages": [{"role": "human", "content": "final"}], "tools": []},
+        },
+        {
+            "index": 5,
+            "type": "model",
+            "event": "model_call_end",
+            "response": [{"content_block_types": ["text"]}],
+        },
+    ]
+
+    steps = execution_step_summaries(calls)
+
+    assert steps[0]["stages"][0]["kind"] == "action"
+    assert steps[1]["kind"] == "context_compaction"
+    assert steps[1]["title"] == "上下文压缩"
+    assert steps[1]["summary"] == "上下文超过预算，保留 10/10 条工具观察，丢弃 0 条。"
+    assert steps[1]["details"]["estimate_chars"] == 56000
+    assert steps[2]["summary"] == "模型生成最终回复。"
 
 
 def test_execution_step_summaries_exposes_model_text_and_requested_tools():

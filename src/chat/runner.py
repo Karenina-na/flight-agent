@@ -586,6 +586,10 @@ def execution_step_summaries(calls: list[dict[str, Any]]) -> list[dict[str, Any]
         call = calls[index]
         call_type = call.get("type")
         event = call.get("event")
+        if event == "react_context_budget_compacted":
+            steps.append(_context_compaction_step(call))
+            index += 1
+            continue
         if call_type == "model" and event == "model_call_start":
             model_calls = [call]
             next_index = index + 1
@@ -665,7 +669,10 @@ def _react_execution_step(
     stages = []
     if model_calls:
         stages.append(_thought_execution_stage(model_calls))
-    stages.extend(_action_execution_stage(group) for group in tool_groups)
+    if len(tool_groups) > 1:
+        stages.append(_action_batch_execution_stage(tool_groups))
+    else:
+        stages.extend(_action_execution_stage(group) for group in tool_groups)
 
     status = _combined_status(stage["status"] for stage in stages)
     event_count = len(model_calls) + sum(len(group) for group in tool_groups)
@@ -680,6 +687,53 @@ def _react_execution_step(
         "event_count": event_count,
         "summary": _react_step_summary(model_calls, tool_count),
         "stages": stages,
+    }
+
+
+def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
+    fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+    observation_count = int(fields.get("observation_count") or 0)
+    preserved_count = int(fields.get("preserved_observation_count") or 0)
+    dropped_count = int(fields.get("dropped_observation_count") or 0)
+    return {
+        "index": call.get("index"),
+        "kind": "context_compaction",
+        "title": "上下文压缩",
+        "status": "completed",
+        "event_count": 1,
+        "summary": (
+            f"上下文超过预算，保留 {preserved_count}/{observation_count} "
+            f"条工具观察，丢弃 {dropped_count} 条。"
+        ),
+        "stages": [
+            {
+                "kind": "context_compaction",
+                "title": "上下文压缩",
+                "status": "completed",
+                "summary": (
+                    f"原请求估算 {fields.get('estimate_chars')} chars，"
+                    f"阈值 {fields.get('threshold_chars')} chars。"
+                ),
+                "details": {
+                    "estimate_chars": fields.get("estimate_chars"),
+                    "threshold_chars": fields.get("threshold_chars"),
+                    "observation_count": observation_count,
+                    "preserved_observation_count": preserved_count,
+                    "dropped_observation_count": dropped_count,
+                    "preview_truncated_count": fields.get("preview_truncated_count"),
+                    "compacted_request_chars": fields.get("compacted_request_chars"),
+                },
+            }
+        ],
+        "details": {
+            "estimate_chars": fields.get("estimate_chars"),
+            "threshold_chars": fields.get("threshold_chars"),
+            "observation_count": observation_count,
+            "preserved_observation_count": preserved_count,
+            "dropped_observation_count": dropped_count,
+            "preview_truncated_count": fields.get("preview_truncated_count"),
+            "compacted_request_chars": fields.get("compacted_request_chars"),
+        },
     }
 
 
@@ -737,6 +791,37 @@ def _action_execution_stage(calls: list[dict[str, Any]]) -> dict[str, Any]:
             "tool_call_id": start.get("tool_call_id"),
             "argument_keys": argument_keys,
             "response_preview": _response_preview(end.get("response")),
+        },
+    }
+
+
+def _action_batch_execution_stage(tool_groups: list[list[dict[str, Any]]]) -> dict[str, Any]:
+    tool_items = [_action_execution_stage(group) for group in tool_groups]
+    tool_names = [
+        str(item["details"].get("tool_name") or "tool")
+        for item in tool_items
+    ]
+    unique_tool_names = sorted(set(tool_names))
+    title_tool = unique_tool_names[0] if len(unique_tool_names) == 1 else "多个工具"
+    status = _combined_status(item["status"] for item in tool_items)
+    return {
+        "kind": "action_batch",
+        "title": "工具批次",
+        "status": status,
+        "summary": f"批量调用 {title_tool} × {len(tool_items)}。",
+        "details": {
+            "tool_count": len(tool_items),
+            "tool_names": unique_tool_names,
+            "tools": [
+                {
+                    "tool_name": item["details"].get("tool_name"),
+                    "tool_call_id": item["details"].get("tool_call_id"),
+                    "argument_keys": item["details"].get("argument_keys"),
+                    "response_preview": item["details"].get("response_preview"),
+                    "status": item["status"],
+                }
+                for item in tool_items
+            ],
         },
     }
 
