@@ -74,6 +74,7 @@ class SummarizationSettings:
 
 @dataclass(frozen=True)
 class FlyClawSettings:
+    external_path: str
     timeout_seconds: int
     proxy_url: str
     route_relay: bool

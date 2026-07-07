@@ -1,3 +1,4 @@
 [submodule "external/FlyClaw"]
 	path = external/FlyClaw
 	url = https://github.com/AI4MSE/FlyClaw.git
+	ignore = untracked

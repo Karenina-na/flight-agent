@@ -397,8 +397,11 @@ def test_execution_step_summaries_exposes_context_compaction_stage():
 
     assert steps[0]["stages"][0]["kind"] == "action"
     assert steps[1]["kind"] == "context_compaction"
-    assert steps[1]["title"] == "上下文压缩"
-    assert steps[1]["summary"] == "上下文超过预算，保留 10/10 条工具观察，丢弃 0 条。"
+    assert steps[1]["title"] == "上下文状态压缩"
+    assert steps[1]["summary"] == (
+        "上下文超过预算，压缩历史状态并保留 10/10 条工具观察，"
+        "丢弃 0 条；Agent 可继续调用工具。"
+    )
     assert steps[1]["details"]["estimate_chars"] == 56000
     assert steps[2]["summary"] == "模型生成最终回复。"
 

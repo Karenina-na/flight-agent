@@ -110,7 +110,7 @@ def test_context_budget_guard_uses_observability_request_trace_size():
     assert _request_size_estimate(request) == model_request_trace_chars(request)
 
 
-def test_context_budget_guard_compacts_large_react_context_and_disables_tools():
+def test_context_budget_guard_compacts_large_react_context_and_preserves_tools():
     guard = ContextBudgetGuard(context_window_tokens=10, max_fraction=0.10)
     seen_requests: list[ModelRequest] = []
 
@@ -145,19 +145,19 @@ def test_context_budget_guard_compacts_large_react_context_and_disables_tools():
     assert response.result[0].content == "summary"
     compact_request = seen_requests[0]
     assert compact_request is not request
-    assert compact_request.tools == []
-    assert compact_request.tool_choice == "none"
+    assert compact_request.tools == request.tools
+    assert compact_request.tool_choice == request.tool_choice
     assert len(compact_request.messages) == 1
-    assert isinstance(compact_request.messages[0], HumanMessage)
+    assert isinstance(compact_request.messages[0], SystemMessage)
     compact_prompt = compact_request.messages[0].content
-    assert "不要再调用工具" in compact_prompt
+    assert "这是历史状态摘要，不是最终回答指令" in compact_prompt
+    assert "必要时仍可调用可用工具" in compact_prompt
     assert "查询未来10天的票价" in compact_prompt
     assert "2026-07-08" in compact_prompt
     assert '"quotes[].price"' in compact_prompt
     assert '"min": 400' in compact_prompt
     assert '"max": 430' in compact_prompt
-    assert isinstance(compact_request.system_message, SystemMessage)
-    assert "必须生成面向用户的最终回答" in compact_request.system_prompt
+    assert compact_request.system_prompt == request.system_prompt
 
 
 def test_context_budget_guard_compacts_web_41e6d813_like_request():
@@ -197,14 +197,18 @@ def test_context_budget_guard_compacts_web_41e6d813_like_request():
     guard.wrap_model_call(request, handler)
 
     compact_request = seen_requests[0]
-    assert compact_request.tools == []
-    assert compact_request.tool_choice == "none"
+    assert compact_request.tools == tools
+    assert compact_request.tool_choice == request.tool_choice
+    assert isinstance(compact_request.messages[0], SystemMessage)
     compact_prompt = compact_request.messages[0].content
+    assert "这是历史状态摘要，不是最终回答指令" in compact_prompt
     assert "后一个月" in compact_prompt
-    assert "不要编造未查询结果" in compact_prompt
+    assert "不要编造账本之外的工具结果" in compact_prompt
     assert "dropped_observation_count" in compact_prompt
     assert "2026-07-10" in compact_prompt
     assert "2026-07-20" in compact_prompt
+    assert isinstance(compact_request.messages[-1], HumanMessage)
+    assert compact_request.messages[-1].content == "请你查询后一个月每一天的机票，并做一个汇总表格"
 
 
 def test_context_budget_guard_keeps_each_tool_observation_card_instead_of_recent_only():
@@ -281,7 +285,7 @@ def test_context_budget_guard_preserves_each_tool_observation_card():
 
     compact_prompt = seen_requests[0].messages[0].content
     assert "工具观察账本" in compact_prompt
-    assert "如果账本显示某些请求已调用成功，不要声称这些请求未完成" in compact_prompt
+    assert "不要重复调用账本中已成功完成且参数相同的工具" in compact_prompt
     for index in range(10):
         assert f"call-{index}" in compact_prompt
         assert f'"slot": {index}' in compact_prompt

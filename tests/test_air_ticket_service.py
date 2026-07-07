@@ -12,7 +12,12 @@ from src.config.schema import AirTicketSettings, FlyClawSettings
 def _settings() -> AirTicketSettings:
     return AirTicketSettings(
         provider="mock",
-        flyclaw=FlyClawSettings(timeout_seconds=20, proxy_url="", route_relay=True),
+        flyclaw=FlyClawSettings(
+            external_path="external/FlyClaw",
+            timeout_seconds=20,
+            proxy_url="",
+            route_relay=True,
+        ),
     )
 
 

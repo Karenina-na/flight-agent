@@ -42,7 +42,7 @@ class ToolObservation:
 
 @dataclass(frozen=True)
 class CompactObservationLedger:
-    """A bounded set of tool-observation cards for final-answer prompts."""
+    """A bounded set of tool-observation cards for compact state summaries."""
 
     observation_count: int
     preserved_observation_count: int

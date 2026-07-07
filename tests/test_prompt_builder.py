@@ -81,7 +81,8 @@ def test_context_budget_prompts_live_in_prompt_package():
         threshold_chars=80,
     )
 
-    assert "不要再调用工具" in prompt
+    assert "这是历史状态摘要，不是最终回答指令" in prompt
+    assert "必要时仍可调用可用工具" in prompt
     assert "工具观察账本" in prompt
     assert '{"observation_count": 1}' in prompt
     assert "原请求估算 100 chars" in prompt

@@ -89,7 +89,12 @@ def test_flyclaw_style_records_are_normalized_to_project_models():
 
 def test_flyclaw_provider_resolves_locations_from_embedded_airport_data():
     provider = FlyClawProvider(
-        FlyClawSettings(timeout_seconds=20, proxy_url="", route_relay=True)
+        FlyClawSettings(
+            external_path="external/FlyClaw",
+            timeout_seconds=20,
+            proxy_url="",
+            route_relay=True,
+        )
     )
 
     results = provider.resolve_locations(["北京", "上海"])
@@ -109,6 +114,7 @@ def test_flyclaw_provider_searches_quotes_with_command_runner(monkeypatch):
     )
     provider = FlyClawProvider(
         FlyClawSettings(
+            external_path="external/FlyClaw",
             timeout_seconds=20,
             proxy_url="socks5h://127.0.0.1:1082",
             route_relay=True,
@@ -146,7 +152,12 @@ def test_flyclaw_provider_queries_flight_and_relay_quotes(monkeypatch):
         lambda **kwargs: _fake_query_records(captured, **kwargs),
     )
     provider = FlyClawProvider(
-        FlyClawSettings(timeout_seconds=20, proxy_url="", route_relay=True)
+        FlyClawSettings(
+            external_path="external/FlyClaw",
+            timeout_seconds=20,
+            proxy_url="",
+            route_relay=True,
+        )
     )
 
     response = provider.query_flight_information(
@@ -172,7 +183,12 @@ def test_flyclaw_provider_honors_route_relay_config(monkeypatch):
         lambda **kwargs: _fake_query_records(captured, **kwargs),
     )
     provider = FlyClawProvider(
-        FlyClawSettings(timeout_seconds=20, proxy_url="", route_relay=False)
+        FlyClawSettings(
+            external_path="external/FlyClaw",
+            timeout_seconds=20,
+            proxy_url="",
+            route_relay=False,
+        )
     )
 
     provider.query_flight_information(
@@ -187,7 +203,12 @@ def test_flyclaw_provider_honors_route_relay_config(monkeypatch):
 def test_build_air_ticket_provider_supports_embedded_flyclaw():
     settings = AirTicketSettings(
         provider="flyclaw",
-        flyclaw=FlyClawSettings(timeout_seconds=20, proxy_url="", route_relay=True),
+        flyclaw=FlyClawSettings(
+            external_path="external/FlyClaw",
+            timeout_seconds=20,
+            proxy_url="",
+            route_relay=True,
+        ),
     )
 
     provider = build_air_ticket_provider(settings)

@@ -11,7 +11,12 @@ from src.config.schema import AirTicketSettings, FlyClawSettings
 def use_mock_air_ticket_provider(monkeypatch):
     settings = AirTicketSettings(
         provider="mock",
-        flyclaw=FlyClawSettings(timeout_seconds=20, proxy_url="", route_relay=True),
+        flyclaw=FlyClawSettings(
+            external_path="external/FlyClaw",
+            timeout_seconds=20,
+            proxy_url="",
+            route_relay=True,
+        ),
     )
     monkeypatch.setattr(
         "src.air_ticket.facade.load_settings",

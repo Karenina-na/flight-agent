@@ -240,6 +240,7 @@ class FlyClawProvider:
 
     def __init__(self, settings: FlyClawSettings):
         self.settings = settings
+        flyclaw_repo.configure_repo_path(settings.external_path)
 
     def resolve_locations(self, locations: Sequence[str]) -> tuple[LocationResolution, ...]:
         results = []

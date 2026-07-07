@@ -505,7 +505,7 @@ def _react_compaction_node(
     return {
         "id": f"{turn_id}:react-compaction-{step_number}",
         "type": "react_compaction",
-        "label": "Context Compaction",
+        "label": "State-Preserving Context Compaction",
         "status": "completed",
         "meta": {
             "step_index": step_number - 1,
@@ -517,6 +517,9 @@ def _react_compaction_node(
             "dropped_observation_count": fields.get("dropped_observation_count"),
             "preview_truncated_count": fields.get("preview_truncated_count"),
             "compacted_request_chars": fields.get("compacted_request_chars"),
+            "compaction_mode": fields.get("compaction_mode"),
+            "compacted_message_count": fields.get("compacted_message_count"),
+            "compacted_tool_count": fields.get("compacted_tool_count"),
         },
         "children": [_trace_event_node(call)],
     }

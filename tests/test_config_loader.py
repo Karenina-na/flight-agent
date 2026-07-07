@@ -46,6 +46,7 @@ summarization:
 air_ticket:
   provider: "mock"
   flyclaw:
+    external_path: "/tmp/FlyClaw"
     timeout_seconds: 20
     proxy_url: "socks5h://127.0.0.1:1082"
     route_relay: false
@@ -79,6 +80,7 @@ air_ticket:
     assert settings.observability.logging.output_path == "logs/skypilot.log"
     assert settings.observability.logging.console is False
     assert settings.air_ticket.provider == "mock"
+    assert settings.air_ticket.flyclaw.external_path == "/tmp/FlyClaw"
     assert settings.air_ticket.flyclaw.timeout_seconds == 20
     assert settings.air_ticket.flyclaw.proxy_url == "socks5h://127.0.0.1:1082"
     assert settings.air_ticket.flyclaw.route_relay is False
@@ -109,6 +111,7 @@ def test_load_settings_falls_back_to_example_config(tmp_path: Path):
     assert settings.summarization.keep.value == 0.35
     assert settings.summarization.trim_tokens_to_summarize == 3000
     assert settings.air_ticket.provider == "mock"
+    assert settings.air_ticket.flyclaw.external_path == "external/FlyClaw"
     assert settings.air_ticket.flyclaw.timeout_seconds == 20
     assert settings.air_ticket.flyclaw.proxy_url == ""
     assert settings.air_ticket.flyclaw.route_relay is True

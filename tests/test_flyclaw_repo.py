@@ -6,6 +6,18 @@ import pytest
 from src.air_ticket import flyclaw_repo
 
 
+def test_configure_repo_path_accepts_relative_and_absolute_paths(tmp_path):
+    original = flyclaw_repo.FLYCLAW_REPO_PATH
+    try:
+        flyclaw_repo.configure_repo_path("external/FlyClaw")
+        assert flyclaw_repo.FLYCLAW_REPO_PATH == flyclaw_repo.DEFAULT_FLYCLAW_REPO_PATH
+
+        flyclaw_repo.configure_repo_path(tmp_path)
+        assert flyclaw_repo.FLYCLAW_REPO_PATH == tmp_path
+    finally:
+        flyclaw_repo.configure_repo_path(original)
+
+
 def test_run_json_command_parses_records_and_restores_proxy(monkeypatch):
     monkeypatch.setenv("HTTP_PROXY", "http://old-proxy")
     monkeypatch.delenv("HTTPS_PROXY", raising=False)

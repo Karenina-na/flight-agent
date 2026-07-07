@@ -1,4 +1,4 @@
-"""Guard model calls from continuing ReAct loops near the context limit."""
+"""Guard model calls from oversized ReAct contexts near the context limit."""
 
 from __future__ import annotations
 
@@ -8,14 +8,11 @@ from hashlib import sha256
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain.messages import HumanMessage, SystemMessage
+from langchain.messages import SystemMessage
 
 from src.observability import log_event
 from src.observability.model_trace import model_request_trace_chars
-from src.prompt import (
-    build_context_compaction_system_prompt,
-    build_context_compaction_user_prompt,
-)
+from src.prompt import build_context_compaction_user_prompt
 from src.guardrails.tool_observation import (
     build_tool_observations,
     compact_tool_observations,
@@ -30,7 +27,7 @@ DEFAULT_MIN_LEDGER_BUDGET_CHARS = 12000
 
 
 class ContextBudgetGuard(AgentMiddleware):
-    """Compact large ReAct contexts into a final-answer request."""
+    """Compact old ReAct context while preserving working state."""
 
     tools: list[Any] = []
 
@@ -81,26 +78,24 @@ class ContextBudgetGuard(AgentMiddleware):
             ),
         )
 
+        summary_message = SystemMessage(
+            content=build_context_compaction_user_prompt(
+                original_user_message=_latest_human_text(request.messages),
+                ledger=ledger,
+                estimate_chars=estimate,
+                threshold_chars=round(threshold),
+            )
+        )
+        recent_messages = _recent_messages_after_last_tool(request.messages)
         compact_request = request.override(
-            system_message=SystemMessage(content=build_context_compaction_system_prompt()),
-            messages=[
-                HumanMessage(
-                    content=build_context_compaction_user_prompt(
-                        original_user_message=_latest_human_text(request.messages),
-                        ledger=ledger,
-                        estimate_chars=estimate,
-                        threshold_chars=round(threshold),
-                    )
-                )
-            ],
-            tools=[],
-            tool_choice="none",
+            messages=[summary_message, *recent_messages],
         )
         _log_context_budget_compacted(
             request,
             estimate_chars=estimate,
             threshold_chars=round(threshold),
             ledger=ledger,
+            compacted_message_count=len(compact_request.messages),
         )
         return compact_request
 
@@ -129,12 +124,21 @@ def _latest_human_text(messages: list[Any]) -> str:
     return ""
 
 
+def _recent_messages_after_last_tool(messages: list[Any]) -> list[Any]:
+    """Keep the current working edge after old tool observations are summarized."""
+    for index in range(len(messages) - 1, -1, -1):
+        if str(getattr(messages[index], "type", "")) == "tool":
+            return list(messages[index + 1 :])
+    return list(messages[-1:])
+
+
 def _log_context_budget_compacted(
     request: ModelRequest,
     *,
     estimate_chars: int,
     threshold_chars: int,
     ledger: CompactObservationLedger,
+    compacted_message_count: int,
 ) -> None:
     log_event(
         "react_context_budget_compacted",
@@ -149,7 +153,10 @@ def _log_context_budget_compacted(
         preview_truncated_count=ledger.preview_truncated_count,
         compacted_request_chars=len(ledger.to_prompt_text()),
         original_message_count=len(request.messages),
+        compacted_message_count=compacted_message_count,
         original_tool_count=len(request.tools),
+        compacted_tool_count=len(request.tools),
+        compaction_mode="state_preserving",
         compacted_prompt_sha256=sha256(
             _latest_human_text(request.messages).encode("utf-8")
         ).hexdigest(),

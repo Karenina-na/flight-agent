@@ -93,6 +93,11 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
         air_ticket=AirTicketSettings(
             provider=_get_air_ticket_provider_type(air_ticket_config, "provider"),
             flyclaw=FlyClawSettings(
+                external_path=_get_str_with_default(
+                    flyclaw_config,
+                    "external_path",
+                    "external/FlyClaw",
+                ),
                 timeout_seconds=_get_int(flyclaw_config, "timeout_seconds"),
                 proxy_url=_get_str_with_default(flyclaw_config, "proxy_url", ""),
                 route_relay=_get_bool_with_default(flyclaw_config, "route_relay", True),

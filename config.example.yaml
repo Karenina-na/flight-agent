@@ -39,6 +39,7 @@ summarization:
 air_ticket:
   provider: "mock"
   flyclaw:
+    external_path: "external/FlyClaw"
     timeout_seconds: 20
     proxy_url: ""
     route_relay: true

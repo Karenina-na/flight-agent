@@ -13,13 +13,28 @@ from types import SimpleNamespace
 from typing import Any, Iterator
 
 
-FLYCLAW_REPO_PATH = Path(__file__).resolve().parents[2] / "external" / "FlyClaw"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_FLYCLAW_REPO_PATH = PROJECT_ROOT / "external" / "FlyClaw"
+FLYCLAW_REPO_PATH = DEFAULT_FLYCLAW_REPO_PATH
 _IMPORT_LOCK = threading.RLock()
 _MODULE_CACHE: dict[str, ModuleType] = {}
 
 
 class FlyClawCommandError(RuntimeError):
     """Raised when a FlyClaw command cannot return JSON records."""
+
+
+def configure_repo_path(path: str | Path) -> None:
+    """Configure the FlyClaw repository path used by provider calls."""
+    global FLYCLAW_REPO_PATH
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+
+    with _IMPORT_LOCK:
+        if candidate != FLYCLAW_REPO_PATH:
+            FLYCLAW_REPO_PATH = candidate
+            _MODULE_CACHE.clear()
 
 
 def get_airport_manager():

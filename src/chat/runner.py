@@ -698,17 +698,17 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
     return {
         "index": call.get("index"),
         "kind": "context_compaction",
-        "title": "上下文压缩",
+        "title": "上下文状态压缩",
         "status": "completed",
         "event_count": 1,
         "summary": (
-            f"上下文超过预算，保留 {preserved_count}/{observation_count} "
-            f"条工具观察，丢弃 {dropped_count} 条。"
+            f"上下文超过预算，压缩历史状态并保留 {preserved_count}/{observation_count} "
+            f"条工具观察，丢弃 {dropped_count} 条；Agent 可继续调用工具。"
         ),
         "stages": [
             {
                 "kind": "context_compaction",
-                "title": "上下文压缩",
+                "title": "状态压缩",
                 "status": "completed",
                 "summary": (
                     f"原请求估算 {fields.get('estimate_chars')} chars，"
@@ -722,6 +722,9 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
                     "dropped_observation_count": dropped_count,
                     "preview_truncated_count": fields.get("preview_truncated_count"),
                     "compacted_request_chars": fields.get("compacted_request_chars"),
+                    "compaction_mode": fields.get("compaction_mode"),
+                    "compacted_message_count": fields.get("compacted_message_count"),
+                    "compacted_tool_count": fields.get("compacted_tool_count"),
                 },
             }
         ],
@@ -733,6 +736,9 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
             "dropped_observation_count": dropped_count,
             "preview_truncated_count": fields.get("preview_truncated_count"),
             "compacted_request_chars": fields.get("compacted_request_chars"),
+            "compaction_mode": fields.get("compaction_mode"),
+            "compacted_message_count": fields.get("compacted_message_count"),
+            "compacted_tool_count": fields.get("compacted_tool_count"),
         },
     }
 
