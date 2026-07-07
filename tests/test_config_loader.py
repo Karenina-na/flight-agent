@@ -104,7 +104,10 @@ def test_load_settings_falls_back_to_example_config(tmp_path: Path):
     assert settings.observability.logging.console is False
     assert settings.summarization.enabled is True
     assert settings.summarization.trigger.type == "fraction"
-    assert settings.summarization.trigger.value == 0.8
+    assert settings.summarization.trigger.value == 0.55
+    assert settings.summarization.keep.type == "fraction"
+    assert settings.summarization.keep.value == 0.35
+    assert settings.summarization.trim_tokens_to_summarize == 3000
     assert settings.air_ticket.provider == "mock"
     assert settings.air_ticket.flyclaw.timeout_seconds == 20
     assert settings.air_ticket.flyclaw.proxy_url == ""
@@ -134,7 +137,10 @@ llm:
     assert settings.observability.logging.output_path == "logs/skypilot.log"
     assert settings.observability.logging.console is False
     assert settings.summarization.trigger.type == "fraction"
-    assert settings.summarization.trigger.value == 0.8
+    assert settings.summarization.trigger.value == 0.55
+    assert settings.summarization.keep.type == "fraction"
+    assert settings.summarization.keep.value == 0.35
+    assert settings.summarization.trim_tokens_to_summarize == 3000
     assert settings.air_ticket.provider == "mock"
 
 

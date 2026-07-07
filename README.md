@@ -6,8 +6,9 @@ skill middleware, and a registry-based tool loading system.
 
 ## Project Layout
 
-- `main.py` - local demo entrypoint.
+- `main.py` - local Web UI demo entrypoint.
 - `src/agent.py` - builds the LangChain agent.
+- `src/chat/` - shared browser session, agent runner, and JSON trace helpers.
 - `src/config/` - loads YAML configuration.
 - `src/runtime.py` - defines runtime context passed into tools.
 - `src/memory/` - builds LangGraph checkpointers, stores, and memory middleware.
@@ -16,6 +17,7 @@ skill middleware, and a registry-based tool loading system.
 - `src/summarization/` - builds conversation summarization middleware.
 - `src/prompt/` - builds system prompts from independent layers.
 - `src/tools/` - registry-based tool package.
+- `src/web_ui/` - stdlib browser UI and local JSON API.
 
 ## Tool Registration
 
@@ -128,7 +130,7 @@ or skill file contents by default.
 
 Runtime id semantics:
 
-- `request_id` - one external request or CLI demo operation.
+- `request_id` - one external request or Web UI chat operation.
 - `run_id` - one agent execution inside that request.
 - `thread_id` - LangGraph conversation thread used by the checkpointer.
 
@@ -168,22 +170,41 @@ summarization:
   model: "main"
   trigger:
     type: "fraction"
-    value: 0.8
+    value: 0.55
   keep:
-    type: "messages"
-    value: 20
-  trim_tokens_to_summarize: 4000
+    type: "fraction"
+    value: 0.35
+  trim_tokens_to_summarize: 3000
 ```
 
-The default `fraction: 0.8` means summarization runs when conversation history
-approaches 80% of the main model context window. Because fractional triggers need
-a known context window, set `llm.context_window_tokens` for the selected model.
+The default `trigger.fraction: 0.55` starts summarization before the visible
+message history plus the fixed system prompt/tool schemas can overflow smaller
+local model contexts. The default `keep.fraction: 0.35` preserves the most recent
+portion by token budget rather than by message count, which is important when
+tool results are large. Because fractional limits need a known context window,
+set `llm.context_window_tokens` for the selected model.
 
 ## Run
+
+Start the local browser demo:
 
 ```bash
 .venv/bin/python main.py
 ```
+
+Then open:
+
+```text
+http://127.0.0.1:7860
+```
+
+The Web UI keeps one in-memory browser session at a time. It supports:
+
+- Natural-language air ticket questions through `/api/chat`.
+- Starting a fresh conversation through `/api/new`.
+- Inspecting registered tools through `/api/tools`.
+- Running a built-in air-ticket quote demo through `/api/demo`.
+- Writing full multi-turn JSON traces under `logs/traces/`.
 
 ## Verify
 

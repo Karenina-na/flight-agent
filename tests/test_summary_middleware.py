@@ -31,9 +31,9 @@ def test_build_summarization_middleware_uses_fraction_trigger_with_main_model():
     settings = SummarizationSettings(
         enabled=True,
         model="main",
-        trigger=WindowClauseSettings(type="fraction", value=0.8),
-        keep=WindowClauseSettings(type="messages", value=20),
-        trim_tokens_to_summarize=4000,
+        trigger=WindowClauseSettings(type="fraction", value=0.55),
+        keep=WindowClauseSettings(type="fraction", value=0.35),
+        trim_tokens_to_summarize=3000,
     )
 
     middleware = build_summarization_middleware(settings, main_model)
@@ -41,6 +41,6 @@ def test_build_summarization_middleware_uses_fraction_trigger_with_main_model():
     assert len(middleware) == 1
     assert isinstance(middleware[0], SummarizationMiddleware)
     assert middleware[0].model is main_model
-    assert middleware[0].trigger == ("fraction", 0.8)
-    assert middleware[0].keep == ("messages", 20)
-    assert middleware[0].trim_tokens_to_summarize == 4000
+    assert middleware[0].trigger == ("fraction", 0.55)
+    assert middleware[0].keep == ("fraction", 0.35)
+    assert middleware[0].trim_tokens_to_summarize == 3000

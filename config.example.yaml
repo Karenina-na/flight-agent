@@ -30,11 +30,11 @@ summarization:
   model: "main"
   trigger:
     type: "fraction"
-    value: 0.8
+    value: 0.55
   keep:
-    type: "messages"
-    value: 20
-  trim_tokens_to_summarize: 4000
+    type: "fraction"
+    value: 0.35
+  trim_tokens_to_summarize: 3000
 
 air_ticket:
   provider: "mock"
