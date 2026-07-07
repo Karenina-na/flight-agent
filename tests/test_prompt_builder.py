@@ -40,9 +40,12 @@ def test_tool_layer_is_generated_from_registered_tools():
     assert "search_airfare_quotes" in tool_prompt
     assert "query_flight_information" in tool_prompt
     assert "相对日期" in tool_prompt
-    assert "Resolve city, airport, or IATA inputs" in tool_prompt
-    assert "Search airfare quote facts" in tool_prompt
-    assert "Query flight information facts" in tool_prompt
+    assert "解析城市/机场/IATA 为机场候选事实" in tool_prompt
+    assert '{"locations":["北京","上海"]}' in tool_prompt
+    assert "查询某航线某日期的公开机票报价事实" in tool_prompt
+    assert '"origin":"北京"' in tool_prompt
+    assert "按航班号查询航班事实" in tool_prompt
+    assert '"flight_number":"CA981"' in tool_prompt
 
 
 def test_prompt_package_exposes_build_modules():
