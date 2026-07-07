@@ -13,7 +13,7 @@ from src.tools.registry import register_tool
 @tool
 def resolve_flight_locations(
     locations: Annotated[
-        list[str] | None,
+        list[str],
         Field(
             description=(
                 "必填。城市名、机场名或 IATA 代码列表。"
@@ -22,7 +22,7 @@ def resolve_flight_locations(
                 "不要留空，不要传 null。"
             )
         ),
-    ] = None,
+    ],
 ) -> str:
     """解析城市/机场/IATA 为机场候选事实。
 

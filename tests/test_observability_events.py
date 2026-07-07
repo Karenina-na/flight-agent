@@ -2,7 +2,9 @@ import pytest
 
 from src.config import LoggingSettings
 from src.observability import (
+    collect_trace_events,
     full_text_trace_fields,
+    log_event,
     observe_agent_run,
     observe_agent_stream,
     text_trace_fields,
@@ -120,3 +122,49 @@ def test_full_text_trace_fields_records_raw_text_and_summary():
     assert fields["user_input_chars"] == 9
     assert fields["user_input_bytes"] == len("查询明天北京到上海".encode("utf-8"))
     assert len(fields["user_input_sha256"]) == 64
+
+
+def test_collect_trace_events_collects_context_events_by_trace_id():
+    context = Context(user_id="u1", thread_id="thread-1", request_id="request-1")
+
+    with collect_trace_events(trace_id="thread-1") as events:
+        log_event(
+            "model_call_start",
+            context=context,
+            redact=False,
+            request_trace={"system_prompt": "完整 prompt"},
+        )
+
+    assert events == [
+        {
+            "event": "model_call_start",
+            "level": "INFO",
+            "fields": {
+                "user_id": "u1",
+                "thread_id": "thread-1",
+                "trace_id": "thread-1",
+                "turn_id": "request-1",
+                "tenant_id": None,
+                "workspace_id": None,
+                "request_id": "request-1",
+                "run_id": None,
+                "environment": "local",
+                "request_trace": {"system_prompt": "完整 prompt"},
+            },
+        }
+    ]
+
+
+def test_collect_trace_events_collects_without_contextvar_when_trace_id_matches():
+    context = Context(user_id="u1", thread_id="thread-1", request_id="request-1")
+
+    with collect_trace_events(trace_id="thread-1") as events:
+        token = collect_trace_events.clear_current_context_for_test()
+        try:
+            log_event("tool_call_start", context=context, redact=False, tool_name="demo")
+        finally:
+            collect_trace_events.reset_current_context_for_test(token)
+
+    assert len(events) == 1
+    assert events[0]["event"] == "tool_call_start"
+    assert events[0]["fields"]["tool_name"] == "demo"

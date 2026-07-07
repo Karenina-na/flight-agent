@@ -1,6 +1,7 @@
 """Observability package public interface."""
 
 from src.observability.events import (
+    collect_trace_events,
     full_text_trace_fields,
     log_event,
     observe_agent_run,
@@ -16,6 +17,7 @@ from src.observability.middleware import (
 __all__ = [
     "ObservabilityMiddleware",
     "build_observability_middleware",
+    "collect_trace_events",
     "configure_logging",
     "full_text_trace_fields",
     "log_event",

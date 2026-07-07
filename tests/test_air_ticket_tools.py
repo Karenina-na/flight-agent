@@ -36,7 +36,7 @@ def test_resolve_flight_locations_tool_returns_location_facts():
 def test_resolve_flight_locations_tool_handles_missing_locations():
     tool = _tool_by_name("resolve_flight_locations")
 
-    payload = json.loads(tool.invoke({}))
+    payload = json.loads(tool.invoke({"locations": []}))
 
     assert payload["items"] == []
     assert "locations is required" in payload["limitations"][0]
@@ -51,6 +51,24 @@ def test_location_and_date_tool_schemas_guide_model_arguments():
     assert "['北京','上海']" in location_schema["properties"]["locations"]["description"]
     assert "明天/tomorrow=1" in date_schema["properties"]["days_offset"]["description"]
     assert "后天/day after tomorrow=2" in date_schema["properties"]["days_offset"]["description"]
+
+
+def test_air_ticket_tool_schemas_match_required_argument_descriptions():
+    location_schema = _tool_by_name(
+        "resolve_flight_locations"
+    ).args_schema.model_json_schema()
+    quote_schema = _tool_by_name("search_airfare_quotes").args_schema.model_json_schema()
+    flight_schema = _tool_by_name(
+        "query_flight_information"
+    ).args_schema.model_json_schema()
+
+    assert location_schema["required"] == ["locations"]
+    assert "default" not in location_schema["properties"]["locations"]
+    assert location_schema["properties"]["locations"]["type"] == "array"
+    assert "anyOf" not in location_schema["properties"]["locations"]
+
+    assert quote_schema["required"] == ["origin", "destination", "departure_date"]
+    assert flight_schema["required"] == ["flight_number"]
 
 
 def test_search_airfare_quotes_tool_returns_quote_facts_only():

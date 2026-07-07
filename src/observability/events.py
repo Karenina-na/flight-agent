@@ -5,12 +5,21 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from hashlib import sha256
+from threading import RLock
 from time import perf_counter
 from typing import Any
 
 from src.observability.logging import get_logger, sanitize_fields
 from src.runtime import Context
+
+_TRACE_EVENTS: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "skypilot_trace_events",
+    default=None,
+)
+_TRACE_EVENT_REGISTRY: dict[str, list[dict[str, Any]]] = {}
+_TRACE_EVENT_LOCK = RLock()
 
 
 def log_event(
@@ -25,6 +34,7 @@ def log_event(
     event_fields = _context_fields(context)
     event_fields.update(fields)
     event_fields = sanitize_fields(event_fields, redact=redact)
+    _append_trace_event(event, level=level, fields=event_fields)
 
     get_logger().log(
         level,
@@ -34,6 +44,24 @@ def log_event(
             "fields": event_fields,
         },
     )
+
+
+@contextmanager
+def collect_trace_events(trace_id: str | None = None) -> Iterator[list[dict[str, Any]]]:
+    """Collect structured log events emitted within this context."""
+    events: list[dict[str, Any]] = []
+    token = _TRACE_EVENTS.set(events)
+    if trace_id:
+        with _TRACE_EVENT_LOCK:
+            _TRACE_EVENT_REGISTRY[trace_id] = events
+    try:
+        yield events
+    finally:
+        if trace_id:
+            with _TRACE_EVENT_LOCK:
+                if _TRACE_EVENT_REGISTRY.get(trace_id) is events:
+                    del _TRACE_EVENT_REGISTRY[trace_id]
+        _TRACE_EVENTS.reset(token)
 
 
 def text_trace_fields(prefix: str, text: str) -> dict[str, Any]:
@@ -136,7 +164,41 @@ def _duration_ms(started_at: float) -> int:
     return round((perf_counter() - started_at) * 1000)
 
 
+def _append_trace_event(event: str, *, level: int, fields: dict[str, Any]) -> None:
+    trace_event = {
+        "event": event,
+        "level": logging.getLevelName(level),
+        "fields": fields,
+    }
+    current_events = _TRACE_EVENTS.get()
+    if current_events is not None:
+        current_events.append(trace_event)
+
+    trace_id = fields.get("trace_id")
+    if not trace_id:
+        return
+
+    with _TRACE_EVENT_LOCK:
+        registered_events = _TRACE_EVENT_REGISTRY.get(str(trace_id))
+
+    if registered_events is not None and registered_events is not current_events:
+        registered_events.append(trace_event)
+
+
+def _clear_current_context_for_test() -> Any:
+    return _TRACE_EVENTS.set(None)
+
+
+def _reset_current_context_for_test(token: Any) -> None:
+    _TRACE_EVENTS.reset(token)
+
+
+collect_trace_events.clear_current_context_for_test = _clear_current_context_for_test  # type: ignore[attr-defined]
+collect_trace_events.reset_current_context_for_test = _reset_current_context_for_test  # type: ignore[attr-defined]
+
+
 __all__ = [
+    "collect_trace_events",
     "full_text_trace_fields",
     "log_event",
     "observe_agent_run",
