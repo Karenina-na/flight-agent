@@ -11,6 +11,7 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 from langchain.messages import HumanMessage, SystemMessage
 
 from src.observability import log_event
+from src.observability.model_trace import model_request_trace_chars
 from src.runtime import Context
 
 
@@ -97,40 +98,7 @@ def build_context_budget_guard(
 
 
 def _request_size_estimate(request: ModelRequest) -> int:
-    payload = {
-        "system_prompt": request.system_prompt,
-        "messages": [_message_trace(message) for message in request.messages],
-        "tools": [_tool_trace(tool) for tool in request.tools],
-    }
-    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str))
-
-
-def _message_trace(message: Any) -> dict[str, Any]:
-    trace = {
-        "type": type(message).__name__,
-        "role": str(getattr(message, "type", "unknown")),
-        "content": getattr(message, "content", None),
-    }
-    name = getattr(message, "name", None)
-    if name:
-        trace["name"] = str(name)
-    tool_call_id = getattr(message, "tool_call_id", None)
-    if tool_call_id:
-        trace["tool_call_id"] = str(tool_call_id)
-    tool_calls = getattr(message, "tool_calls", None)
-    if tool_calls:
-        trace["tool_calls"] = tool_calls
-    return trace
-
-
-def _tool_trace(tool: Any) -> Any:
-    if isinstance(tool, dict):
-        return tool
-    return {
-        "name": str(getattr(tool, "name", "")),
-        "description": str(getattr(tool, "description", "")),
-        "args": getattr(tool, "args", None),
-    }
+    return model_request_trace_chars(request)
 
 
 def _tool_fact_summaries(messages: list[Any], *, max_items: int) -> list[str]:
@@ -236,7 +204,8 @@ def _final_answer_prompt(
         "回答要求：\n"
         "- 用中文回答。\n"
         "- 汇总已查询日期的票价样本，能给价格区间就给区间。\n"
-        "- 如果未来 10 天没有全部查完，明确说明只覆盖已查询日期，不要编造未查询日期。\n"
+        "- 如果用户要求更长日期范围（例如未来 10 天、后一个月或每天汇总）但没有全部查完，明确说明只覆盖已查询日期，不要编造未查询日期。\n"
+        "- 建议用户新开会话、缩小日期范围，或分批查询后再生成完整表格。\n"
         "- 可以给出基于样本的非强制性出行建议，但必须说明数据限制。\n"
         "- 输出普通 Markdown 正文，不要输出 function/tool/XML/JSON 调用格式。\n\n"
         f"上下文预算提示：原请求估算 {estimate_chars} chars，阈值 {threshold_chars} chars。"

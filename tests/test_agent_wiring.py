@@ -9,12 +9,12 @@ from src.skills import SkillMiddleware
 
 def test_agent_middleware_is_flat_and_includes_observability_skills_and_memory():
     assert len(middleware) == 6
-    assert isinstance(middleware[0], ObservabilityMiddleware)
-    assert isinstance(middleware[1], ContextBudgetGuard)
-    assert isinstance(middleware[2], ReactDuplicateToolCallGuard)
-    assert isinstance(middleware[3], SummarizationMiddleware)
-    assert isinstance(middleware[4], SkillMiddleware)
-    assert isinstance(middleware[5], MemoryMiddleware)
+    assert isinstance(middleware[0], SummarizationMiddleware)
+    assert isinstance(middleware[1], SkillMiddleware)
+    assert isinstance(middleware[2], MemoryMiddleware)
+    assert isinstance(middleware[3], ContextBudgetGuard)
+    assert isinstance(middleware[4], ObservabilityMiddleware)
+    assert isinstance(middleware[5], ReactDuplicateToolCallGuard)
     assert all(not isinstance(item, list) for item in middleware)
 
 

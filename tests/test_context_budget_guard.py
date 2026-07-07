@@ -5,7 +5,11 @@ from langchain.messages import AIMessage, HumanMessage, SystemMessage, ToolMessa
 from langchain_openai import ChatOpenAI
 
 from src.guardrails import ContextBudgetGuard
+from src.guardrails.context_budget_guard import _request_size_estimate
+from src.observability.model_trace import model_request_trace_chars
+from src.prompt import build_system_prompt
 from src.runtime import Context
+from src.tools import get_tools
 
 
 def _model() -> ChatOpenAI:
@@ -36,6 +40,21 @@ def _request(
                 run_id="run-1",
             )
         ),
+    )
+
+
+def _quote_payload(departure_date: str, low: int, high: int) -> str:
+    return (
+        '{"query":{"origin":"北京","destination":"上海",'
+        f'"departure_date":"{departure_date}",'
+        '"return_date":null,"cabin":"economy","adults":1,'
+        '"children":0,"infants":0,"stops":0,"currency":"cny",'
+        '"origin_airports":["PEK","PKX"],"destination_airports":["PVG","SHA"]},'
+        '"captured_at":"2026-07-07T19:52:12+08:00",'
+        '"sources_used":["fliggy_mcp"],'
+        f'"quotes":[{{"price":{low},"currency":"CNY"}},'
+        f'{{"price":{high},"currency":"CNY"}}],'
+        '"limitations":["sample only"]}'
     )
 
 
@@ -71,6 +90,24 @@ def test_context_budget_guard_does_not_compact_without_tool_results():
 
     assert response.result[0].content == "ok"
     assert seen_requests == [request]
+
+
+def test_context_budget_guard_uses_observability_request_trace_size():
+    tools = get_tools()
+    request = _request(
+        messages=[
+            HumanMessage(content="查询这个日期后十天的价格，并给出购买结论"),
+            ToolMessage(
+                content=_quote_payload("2026-07-10", 550, 700),
+                name="search_airfare_quotes",
+                tool_call_id="call-1",
+            ),
+        ],
+        system_prompt=build_system_prompt(tools=tools),
+        tools=tools,
+    )
+
+    assert _request_size_estimate(request) == model_request_trace_chars(request)
 
 
 def test_context_budget_guard_compacts_large_react_context_and_disables_tools():
@@ -120,6 +157,53 @@ def test_context_budget_guard_compacts_large_react_context_and_disables_tools():
     assert "max_price=430" in compact_prompt
     assert isinstance(compact_request.system_message, SystemMessage)
     assert "必须生成面向用户的最终回答" in compact_request.system_prompt
+
+
+def test_context_budget_guard_compacts_web_41e6d813_like_request():
+    guard = ContextBudgetGuard(context_window_tokens=8192, max_fraction=0.85)
+    tools = get_tools()
+    seen_requests: list[ModelRequest] = []
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        seen_requests.append(request)
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    request = _request(
+        messages=[
+            HumanMessage(content="请查询北京到上海在 2026-07-10 的机票报价样本"),
+            ToolMessage(
+                content=_quote_payload("2026-07-10", 550, 700),
+                name="search_airfare_quotes",
+                tool_call_id="call-1",
+            ),
+            AIMessage(content="2026-07-10 报价摘要。" + "历史回答" * 1200),
+            HumanMessage(content="查询这个日期后十天的价格，并给出购买结论"),
+            ToolMessage(
+                content=_quote_payload("2026-07-20", 340, 460),
+                name="search_airfare_quotes",
+                tool_call_id="call-2",
+            ),
+            AIMessage(content="2026-07-20 报价摘要。" + "历史回答" * 1200),
+            HumanMessage(content="请你查询后一个月每一天的机票，并做一个汇总表格"),
+        ],
+        system_prompt=build_system_prompt(tools=tools) + "上下文扩展。" * 500,
+        tools=tools,
+    )
+
+    threshold = round(8192 * 4 * 0.85)
+    assert _request_size_estimate(request) > threshold
+
+    guard.wrap_model_call(request, handler)
+
+    compact_request = seen_requests[0]
+    assert compact_request.tools == []
+    assert compact_request.tool_choice == "none"
+    compact_prompt = compact_request.messages[0].content
+    assert "后一个月" in compact_prompt
+    assert "不要编造未查询日期" in compact_prompt
+    assert "新开会话" in compact_prompt
+    assert "2026-07-10" in compact_prompt
+    assert "2026-07-20" in compact_prompt
 
 
 def test_context_budget_guard_keeps_recent_tool_facts_bounded():

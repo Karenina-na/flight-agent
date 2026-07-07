@@ -33,17 +33,17 @@ tools = get_tools()
 checkpointer = build_checkpointer(settings.memory.checkpointer)
 store = build_store(settings.memory.store)
 middleware = [
-    build_observability_middleware(redact=settings.observability.logging.redact),
-    build_context_budget_guard(
-        context_window_tokens=settings.llm.context_window_tokens,
-    ),
-    build_react_duplicate_tool_call_guard(),
     *build_summarization_middleware(
         settings=settings.summarization,
         main_model=model,
     ),
     build_skill_middleware(skills_root=Path("skills")),
     build_memory_middleware(),
+    build_context_budget_guard(
+        context_window_tokens=settings.llm.context_window_tokens,
+    ),
+    build_observability_middleware(redact=settings.observability.logging.redact),
+    build_react_duplicate_tool_call_guard(),
 ]
 
 agent = create_agent(
