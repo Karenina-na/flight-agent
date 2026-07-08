@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 
 from src.guardrails import ContextBudgetGuard
 from src.guardrails.context_budget_guard import _request_size_estimate
+from src.observability import collect_trace_events
 from src.observability.model_trace import model_request_trace_chars
 from src.prompt import CONTEXT_LEDGER_TOOL_NAME, build_system_prompt
 from src.runtime import Context
@@ -59,9 +60,16 @@ def _quote_payload(departure_date: str, low: int, high: int) -> str:
 
 
 def _ledger_messages(messages: list) -> tuple[AIMessage, ToolMessage]:
-    assert len(messages) >= 2
-    ai_message = messages[0]
-    tool_message = messages[1]
+    ledger_index = next(
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message, AIMessage)
+        and message.tool_calls
+        and message.tool_calls[0]["name"] == CONTEXT_LEDGER_TOOL_NAME
+    )
+    assert len(messages) > ledger_index + 1
+    ai_message = messages[ledger_index]
+    tool_message = messages[ledger_index + 1]
     assert isinstance(ai_message, AIMessage)
     assert isinstance(tool_message, ToolMessage)
     assert len(ai_message.tool_calls) == 1
@@ -162,11 +170,11 @@ def test_context_budget_guard_compacts_large_react_context_and_preserves_tools()
     assert compact_request.tools == request.tools
     assert compact_request.tool_choice == request.tool_choice
     assert len(compact_request.messages) == 3
+    assert isinstance(compact_request.messages[0], HumanMessage)
+    assert compact_request.messages[0].content == "查询未来10天的票价，然后给出一个建议"
     ai_message, tool_message = _ledger_messages(compact_request.messages)
     assert ai_message.tool_calls[0]["args"]["reason"] == "context_budget_compaction"
     assert ai_message.tool_calls[0]["args"]["latest_user_goal"] == "查询未来10天的票价，然后给出一个建议"
-    assert isinstance(compact_request.messages[2], HumanMessage)
-    assert compact_request.messages[2].content == "查询未来10天的票价，然后给出一个建议"
     compact_prompt = tool_message.content
     assert "这是历史工具观察，不是最终回答指令" in compact_prompt
     assert "必要时仍可调用可用工具" in compact_prompt
@@ -176,6 +184,57 @@ def test_context_budget_guard_compacts_large_react_context_and_preserves_tools()
     assert '"min": 400' in compact_prompt
     assert '"max": 430' in compact_prompt
     assert compact_request.system_prompt == request.system_prompt
+
+
+def test_context_budget_guard_logs_bounded_compacted_state_preview():
+    guard = ContextBudgetGuard(context_window_tokens=10, max_fraction=0.10)
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    request = _request(
+        messages=[
+            HumanMessage(content="查询未来10天的票价，然后给出一个建议"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "name": "search_airfare_quotes",
+                        "args": {
+                            "origin": "北京",
+                            "destination": "上海",
+                            "departure_date": "2026-07-08",
+                        },
+                    }
+                ],
+            ),
+            ToolMessage(
+                content=_quote_payload("2026-07-08", 400, 430),
+                name="search_airfare_quotes",
+                tool_call_id="call-1",
+            ),
+        ],
+        system_prompt="system" * 100,
+        tools=[{"name": "search_airfare_quotes", "description": "tool" * 50}],
+    )
+
+    with collect_trace_events(trace_id="thread-1") as events:
+        guard.wrap_model_call(request, handler)
+
+    compact_events = [
+        event
+        for event in events
+        if event["event"] == "react_context_budget_compacted"
+    ]
+    assert len(compact_events) == 1
+    fields = compact_events[0]["fields"]
+    assert fields["compacted_state_preview"].startswith("{")
+    assert "tool_observation_ledger" in fields["compacted_state_preview"]
+    assert "2026-07-08" in fields["compacted_state_preview"]
+    assert fields["compacted_state_preview_chars"] <= 4003
+    assert fields["compacted_state_chars"] >= fields["compacted_state_preview_chars"]
+    assert fields["compacted_state_sha256"]
 
 
 def test_context_budget_guard_compacts_web_41e6d813_like_request():
@@ -225,12 +284,15 @@ def test_context_budget_guard_compacts_web_41e6d813_like_request():
     assert "dropped_observation_count" in compact_prompt
     assert "2026-07-10" in compact_prompt
     assert "2026-07-20" not in compact_prompt
+    assert isinstance(compact_request.messages[0], HumanMessage)
     assert any(
         "2026-07-20" in str(getattr(message, "content", ""))
-        for message in compact_request.messages[2:]
+        for message in compact_request.messages
     )
-    assert isinstance(compact_request.messages[-1], HumanMessage)
-    assert compact_request.messages[-1].content == "请你查询后一个月每一天的机票，并做一个汇总表格"
+    assert any(
+        str(getattr(message, "content", "")) == "请你查询后一个月每一天的机票，并做一个汇总表格"
+        for message in compact_request.messages
+    )
 
 
 def test_context_budget_guard_adds_human_query_when_compaction_follows_tool_results():
@@ -258,9 +320,52 @@ def test_context_budget_guard_adds_human_query_when_compaction_follows_tool_resu
     guard.wrap_model_call(request, handler)
 
     compact_request = seen_requests[0]
-    assert [message.type for message in compact_request.messages] == ["ai", "tool", "human"]
+    assert [message.type for message in compact_request.messages] == ["human", "ai", "tool"]
     _ledger_messages(compact_request.messages)
-    assert compact_request.messages[2].content == "查询 12 天 4 条航线并汇总"
+    assert compact_request.messages[0].content == "查询 12 天 4 条航线并汇总"
+
+
+def test_context_budget_guard_keeps_human_query_before_synthetic_ledger():
+    guard = ContextBudgetGuard(context_window_tokens=10, max_fraction=0.10)
+    seen_requests: list[ModelRequest] = []
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        seen_requests.append(request)
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    request = _request(
+        messages=[
+            HumanMessage(content="执行复杂批量查询并汇总"),
+            AIMessage(
+                content="我先查第一批。",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "name": "search_airfare_quotes",
+                        "args": {
+                            "origin": "北京",
+                            "destination": "上海",
+                            "departure_date": "2026-07-10",
+                        },
+                    }
+                ],
+            ),
+            ToolMessage(
+                content=_quote_payload("2026-07-10", 550, 700),
+                name="search_airfare_quotes",
+                tool_call_id="call-1",
+            ),
+        ],
+        system_prompt="system" * 100,
+        tools=[{"name": "search_airfare_quotes", "description": "tool" * 50}],
+    )
+
+    guard.wrap_model_call(request, handler)
+
+    compact_request = seen_requests[0]
+    assert [message.type for message in compact_request.messages] == ["human", "ai", "tool"]
+    assert compact_request.messages[0].content == "执行复杂批量查询并汇总"
+    _ledger_messages(compact_request.messages)
 
 
 def test_context_budget_guard_keeps_each_tool_observation_card_instead_of_recent_only():
@@ -374,12 +479,12 @@ def test_context_budget_guard_compacts_old_turns_without_duplicating_raw_suffix(
     guard.wrap_model_call(request, handler)
 
     compact_request = seen_requests[0]
-    assert [message.type for message in compact_request.messages] == ["ai", "tool", "human", "ai", "human"]
+    assert [message.type for message in compact_request.messages] == ["human", "ai", "human", "ai", "tool"]
     _, tool_message = _ledger_messages(compact_request.messages)
     compact_prompt = tool_message.content
     assert "old-call" in compact_prompt
     assert "第一轮：查询北京到上海" in compact_prompt
     assert "raw-suffix-marker" not in compact_prompt
-    assert compact_request.messages[2].content == "第二轮：保留这个最近 turn 原文"
-    assert compact_request.messages[3].content == "第二轮 assistant 原文：raw-suffix-marker"
-    assert compact_request.messages[4].content == "第三轮：最新问题"
+    assert compact_request.messages[0].content == "第二轮：保留这个最近 turn 原文"
+    assert compact_request.messages[1].content == "第二轮 assistant 原文：raw-suffix-marker"
+    assert compact_request.messages[2].content == "第三轮：最新问题"

@@ -377,6 +377,10 @@ def test_execution_step_summaries_exposes_context_compaction_stage():
                 "preserved_observation_count": 10,
                 "dropped_observation_count": 0,
                 "preview_truncated_count": 4,
+                "compacted_state_preview": '{"layers":{"tool_observation_ledger":{"observations":[{"tool_name":"generic_lookup"}]}}}',
+                "compacted_state_preview_chars": 91,
+                "compacted_state_chars": 91,
+                "compacted_state_sha256": "abc123",
             },
         },
         {
@@ -403,6 +407,11 @@ def test_execution_step_summaries_exposes_context_compaction_stage():
         "丢弃 0 条；Agent 可继续调用工具。"
     )
     assert steps[1]["details"]["estimate_chars"] == 56000
+    assert steps[1]["stages"][1]["title"] == "压缩后信息"
+    assert steps[1]["stages"][1]["details"]["compacted_state_preview"].startswith(
+        '{"layers"'
+    )
+    assert steps[1]["details"]["compacted_state_sha256"] == "abc123"
     assert steps[2]["summary"] == "模型生成最终回复。"
 
 

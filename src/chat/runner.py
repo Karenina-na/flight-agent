@@ -695,6 +695,7 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
     observation_count = int(fields.get("observation_count") or 0)
     preserved_count = int(fields.get("preserved_observation_count") or 0)
     dropped_count = int(fields.get("dropped_observation_count") or 0)
+    compacted_state_details = _context_compaction_state_details(fields)
     return {
         "index": call.get("index"),
         "kind": "context_compaction",
@@ -727,7 +728,23 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
                     "compacted_tool_count": fields.get("compacted_tool_count"),
                 },
             }
-        ],
+        ]
+        + (
+            [
+                {
+                    "kind": "context_compaction_state",
+                    "title": "压缩后信息",
+                    "status": "completed",
+                    "summary": (
+                        f"压缩后状态 {compacted_state_details.get('compacted_state_chars')} chars，"
+                        f"当前展示前 {compacted_state_details.get('compacted_state_preview_chars')} chars。"
+                    ),
+                    "details": compacted_state_details,
+                }
+            ]
+            if compacted_state_details
+            else []
+        ),
         "details": {
             "estimate_chars": fields.get("estimate_chars"),
             "threshold_chars": fields.get("threshold_chars"),
@@ -739,7 +756,20 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
             "compaction_mode": fields.get("compaction_mode"),
             "compacted_message_count": fields.get("compacted_message_count"),
             "compacted_tool_count": fields.get("compacted_tool_count"),
+            **compacted_state_details,
         },
+    }
+
+
+def _context_compaction_state_details(fields: dict[str, Any]) -> dict[str, Any]:
+    preview = fields.get("compacted_state_preview")
+    if not isinstance(preview, str) or not preview:
+        return {}
+    return {
+        "compacted_state_preview": preview,
+        "compacted_state_preview_chars": fields.get("compacted_state_preview_chars"),
+        "compacted_state_chars": fields.get("compacted_state_chars"),
+        "compacted_state_sha256": fields.get("compacted_state_sha256"),
     }
 
 

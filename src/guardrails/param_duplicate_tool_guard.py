@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
@@ -13,13 +14,25 @@ from src.observability import log_event
 from src.runtime import Context
 
 
-class ReactDuplicateToolCallGuard(AgentMiddleware):
-    """Block identical tool calls repeated within the same request turn."""
+DEFAULT_LOOP_STOP_AFTER = 3
+
+
+@dataclass
+class _ScopeState:
+    """In-memory duplicate-call state for one request scope."""
+
+    seen_keys: set[str] = field(default_factory=set)
+    duplicate_count: int = 0
+
+
+class ParamAwareDuplicateToolCallGuard(AgentMiddleware):
+    """Block repeated exact tool+args calls while allowing varied arguments."""
 
     tools: list[Any] = []
 
-    def __init__(self) -> None:
-        self._seen_by_scope: dict[str, set[str]] = {}
+    def __init__(self, *, loop_stop_after: int = DEFAULT_LOOP_STOP_AFTER) -> None:
+        self.loop_stop_after = loop_stop_after
+        self._state_by_scope: dict[str, _ScopeState] = {}
 
     def wrap_tool_call(
         self,
@@ -27,9 +40,9 @@ class ReactDuplicateToolCallGuard(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Any],
     ) -> Any:
         """Run the first unique tool call and block exact duplicates."""
-        duplicate = self._record_or_detect_duplicate(request)
-        if duplicate:
-            return self._duplicate_response(request)
+        duplicate_state = self._record_or_detect_duplicate(request)
+        if duplicate_state:
+            return self._duplicate_response(request, duplicate_state)
         return handler(request)
 
     async def awrap_tool_call(
@@ -38,31 +51,41 @@ class ReactDuplicateToolCallGuard(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Awaitable[Any]],
     ) -> Any:
         """Run the first unique async tool call and block exact duplicates."""
-        duplicate = self._record_or_detect_duplicate(request)
-        if duplicate:
-            return self._duplicate_response(request)
+        duplicate_state = self._record_or_detect_duplicate(request)
+        if duplicate_state:
+            return self._duplicate_response(request, duplicate_state)
         return await handler(request)
 
-    def _record_or_detect_duplicate(self, request: ToolCallRequest) -> bool:
+    def _record_or_detect_duplicate(self, request: ToolCallRequest) -> _ScopeState | None:
         scope = _request_scope(request)
         key = _tool_call_key(request)
-        seen = self._seen_by_scope.setdefault(scope, set())
-        if key in seen:
-            _log_duplicate_blocked(request, scope=scope, key=key)
-            return True
-        seen.add(key)
-        return False
+        state = self._state_by_scope.setdefault(scope, _ScopeState())
+        if key in state.seen_keys:
+            state.duplicate_count += 1
+            _log_duplicate_blocked(
+                request,
+                scope=scope,
+                key=key,
+                state=state,
+                loop_stop_after=self.loop_stop_after,
+            )
+            return state
+        state.seen_keys.add(key)
+        return None
 
-    def _duplicate_response(self, request: ToolCallRequest) -> ToolMessage:
+    def _duplicate_response(
+        self,
+        request: ToolCallRequest,
+        state: _ScopeState,
+    ) -> ToolMessage:
+        stop_requested = state.duplicate_count >= self.loop_stop_after
         payload = {
-            "status": "duplicate_blocked",
-            "message": (
-                "This exact tool call has already been executed in this turn. "
-                "Use the previous tool result and produce a final answer "
-                "instead of calling the same tool again."
-            ),
+            "status": "react_loop_stop_requested" if stop_requested else "duplicate_blocked",
+            "message": _duplicate_message(stop_requested=stop_requested),
             "tool_name": _tool_name(request),
             "argument_keys": _argument_keys(request),
+            "duplicate_count": state.duplicate_count,
+            "loop_stop_after": self.loop_stop_after,
         }
         return ToolMessage(
             content=json.dumps(payload, ensure_ascii=False, sort_keys=True),
@@ -72,9 +95,26 @@ class ReactDuplicateToolCallGuard(AgentMiddleware):
         )
 
 
-def build_react_duplicate_tool_call_guard() -> ReactDuplicateToolCallGuard:
-    """Build duplicate tool-call guard middleware."""
-    return ReactDuplicateToolCallGuard()
+def build_param_aware_duplicate_tool_call_guard(
+    *,
+    loop_stop_after: int = DEFAULT_LOOP_STOP_AFTER,
+) -> ParamAwareDuplicateToolCallGuard:
+    """Build parameter-aware duplicate tool-call guard middleware."""
+    return ParamAwareDuplicateToolCallGuard(loop_stop_after=loop_stop_after)
+
+
+def _duplicate_message(*, stop_requested: bool) -> str:
+    if stop_requested:
+        return (
+            "This run has repeated already-executed tool calls several times. "
+            "Stop calling tools and produce a concise interim answer from the "
+            "existing observations and todos."
+        )
+    return (
+        "This exact tool call has already been executed in this turn. "
+        "Use the previous tool result and continue from the next distinct todo "
+        "or produce an answer instead of calling the same tool again."
+    )
 
 
 def _request_scope(request: ToolCallRequest) -> str:
@@ -133,6 +173,8 @@ def _log_duplicate_blocked(
     *,
     scope: str,
     key: str,
+    state: _ScopeState,
+    loop_stop_after: int,
 ) -> None:
     log_event(
         "react_duplicate_tool_call_blocked",
@@ -140,6 +182,9 @@ def _log_duplicate_blocked(
         redact=False,
         scope=scope,
         duplicate_key=key,
+        duplicate_count=state.duplicate_count,
+        loop_stop_after=loop_stop_after,
+        stop_requested=state.duplicate_count >= loop_stop_after,
         tool_call_id=_tool_call_id(request),
         tool_name=_tool_name(request),
         argument_keys=_argument_keys(request),
@@ -150,3 +195,9 @@ def _log_duplicate_blocked(
             "argument_keys": _argument_keys(request),
         },
     )
+
+
+__all__ = [
+    "ParamAwareDuplicateToolCallGuard",
+    "build_param_aware_duplicate_tool_call_guard",
+]

@@ -4,14 +4,14 @@ from src.guardrails.context_budget_guard import (
     ContextBudgetGuard,
     build_context_budget_guard,
 )
-from src.guardrails.react_duplicate_tool_guard import (
-    ReactDuplicateToolCallGuard,
-    build_react_duplicate_tool_call_guard,
+from src.guardrails.param_duplicate_tool_guard import (
+    ParamAwareDuplicateToolCallGuard,
+    build_param_aware_duplicate_tool_call_guard,
 )
 
 __all__ = [
     "ContextBudgetGuard",
-    "ReactDuplicateToolCallGuard",
+    "ParamAwareDuplicateToolCallGuard",
     "build_context_budget_guard",
-    "build_react_duplicate_tool_call_guard",
+    "build_param_aware_duplicate_tool_call_guard",
 ]

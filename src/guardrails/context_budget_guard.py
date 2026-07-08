@@ -30,6 +30,7 @@ DEFAULT_CHARS_PER_TOKEN = 4
 DEFAULT_LEDGER_FRACTION = 0.25
 DEFAULT_MIN_LEDGER_BUDGET_CHARS = 12000
 DEFAULT_RAW_RECENT_TURNS = 2
+DEFAULT_COMPACTED_STATE_PREVIEW_CHARS = 4000
 
 
 class ContextBudgetGuard(AgentMiddleware):
@@ -101,7 +102,7 @@ class ContextBudgetGuard(AgentMiddleware):
         )
         recent_messages = raw_messages or [HumanMessage(content=latest_human_text)]
         compact_request = request.override(
-            messages=[*ledger_messages, *recent_messages],
+            messages=[*recent_messages, *ledger_messages],
         )
         _log_context_budget_compacted(
             request,
@@ -140,6 +141,12 @@ def _latest_human_text(messages: list[Any]) -> str:
 
 def _has_human_message(messages: list[Any]) -> bool:
     return any(str(getattr(message, "type", "")) == "human" for message in messages)
+
+
+def _preview_text(text: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    return text if len(text) <= limit else f"{text[:limit]}..."
 
 
 def _synthetic_ledger_messages(
@@ -194,6 +201,11 @@ def _log_context_budget_compacted(
     compacted_message_count: int,
     raw_message_count: int,
 ) -> None:
+    compacted_state_text = ledger.to_prompt_text()
+    compacted_state_preview = _preview_text(
+        compacted_state_text,
+        DEFAULT_COMPACTED_STATE_PREVIEW_CHARS,
+    )
     log_event(
         "react_context_budget_compacted",
         context=_request_context(request),
@@ -211,13 +223,17 @@ def _log_context_budget_compacted(
         assistant_message_count=ledger.assistant_message_count,
         preserved_assistant_message_count=ledger.preserved_assistant_message_count,
         dropped_assistant_message_count=ledger.dropped_assistant_message_count,
-        compacted_request_chars=len(ledger.to_prompt_text()),
+        compacted_request_chars=len(compacted_state_text),
         original_message_count=len(request.messages),
         compacted_message_count=compacted_message_count,
         raw_message_count=raw_message_count,
         original_tool_count=len(request.tools),
         compacted_tool_count=len(request.tools),
         compaction_mode=ledger.strategy,
+        compacted_state_preview=compacted_state_preview,
+        compacted_state_preview_chars=len(compacted_state_preview),
+        compacted_state_chars=len(compacted_state_text),
+        compacted_state_sha256=sha256(compacted_state_text.encode("utf-8")).hexdigest(),
         compacted_prompt_sha256=sha256(
             _latest_human_text(request.messages).encode("utf-8")
         ).hexdigest(),

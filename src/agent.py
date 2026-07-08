@@ -1,12 +1,13 @@
 from pathlib import Path
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import TodoListMiddleware, ToolCallLimitMiddleware
 from langchain_openai import ChatOpenAI
 
 from src.config import load_settings
 from src.guardrails import (
     build_context_budget_guard,
-    build_react_duplicate_tool_call_guard,
+    build_param_aware_duplicate_tool_call_guard,
 )
 from src.memory import build_checkpointer, build_memory_middleware, build_store
 from src.observability import configure_logging, build_observability_middleware
@@ -39,11 +40,13 @@ middleware = [
     ),
     build_skill_middleware(skills_root=Path("skills")),
     build_memory_middleware(),
+    TodoListMiddleware(),
     build_context_budget_guard(
         context_window_tokens=settings.llm.context_window_tokens,
     ),
     build_observability_middleware(redact=settings.observability.logging.redact),
-    build_react_duplicate_tool_call_guard(),
+    build_param_aware_duplicate_tool_call_guard(loop_stop_after=3),
+    ToolCallLimitMiddleware(run_limit=64, exit_behavior="end"),
 ]
 
 agent = create_agent(

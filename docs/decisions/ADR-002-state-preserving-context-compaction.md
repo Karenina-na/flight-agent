@@ -149,9 +149,9 @@ After compaction, the request keeps the original execution surface:
 system_prompt: original system prompt
 
 messages:
-  1. AIMessage: synthetic tool call to context_observation_ledger
-  2. ToolMessage: layered compact state for compressed older turns
-  3. raw recent turn messages
+  1. raw recent turn messages
+  2. AIMessage: synthetic tool call to context_observation_ledger
+  3. ToolMessage: layered compact state for compressed older turns
 
 tools: original tools
 tool_choice: original tool_choice
@@ -161,15 +161,20 @@ The synthetic tool observation is protocol-valid: the injected `ToolMessage`
 always has a matching preceding `AIMessage.tool_calls[].id`. The guard does not
 insert an orphan `ToolMessage` directly into the message list.
 
+Raw recent turns are kept before the synthetic ledger pair so model prompt
+templates that require an early user query can still render the compacted
+request. The synthetic ledger remains part of the same request and supplies the
+compressed historical working state after the recent user context is visible.
+
 Example shape:
 
 ```text
-AIMessage(tool_calls=[context_observation_ledger])
-ToolMessage(tool_call_id=same id, content=layered compact state)
 HumanMessage(...)
 AIMessage(...)
 ToolMessage(...)
 HumanMessage(latest user request)
+AIMessage(tool_calls=[context_observation_ledger])
+ToolMessage(tool_call_id=same id, content=layered compact state)
 
 tools: original tools
 tool_choice: original tool_choice

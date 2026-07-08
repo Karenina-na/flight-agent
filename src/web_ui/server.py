@@ -1150,6 +1150,15 @@ INDEX_HTML = r"""<!doctype html>
           </div>
         `;
       }
+      if (stage.kind === "context_compaction_state") {
+        return `
+          <div class="execution-stage-flow">
+            ${renderStageRow("压缩后大小", `${formatNumber(details.compacted_state_chars)} chars`)}
+            ${renderStageRow("展示大小", `${formatNumber(details.compacted_state_preview_chars)} chars`)}
+            ${renderStageRow("内容摘要", formatCompactedStatePreview(details.compacted_state_preview))}
+          </div>
+        `;
+      }
       return "";
     }
 
@@ -1223,6 +1232,12 @@ INDEX_HTML = r"""<!doctype html>
         // Keep the raw preview below when tool output is not JSON.
       }
       return escapeHtml(raw.length > 160 ? `${raw.slice(0, 160)}...` : raw);
+    }
+
+    function formatCompactedStatePreview(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "暂无压缩后信息";
+      return `<pre><code>${escapeHtml(raw)}</code></pre>`;
     }
 
     function statusText(status) {

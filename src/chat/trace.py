@@ -520,6 +520,10 @@ def _react_compaction_node(
             "compaction_mode": fields.get("compaction_mode"),
             "compacted_message_count": fields.get("compacted_message_count"),
             "compacted_tool_count": fields.get("compacted_tool_count"),
+            "compacted_state_preview": fields.get("compacted_state_preview"),
+            "compacted_state_preview_chars": fields.get("compacted_state_preview_chars"),
+            "compacted_state_chars": fields.get("compacted_state_chars"),
+            "compacted_state_sha256": fields.get("compacted_state_sha256"),
         },
         "children": [_trace_event_node(call)],
     }
