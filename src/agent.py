@@ -6,7 +6,7 @@ from langchain_openai import ChatOpenAI
 
 from src.config import load_settings
 from src.guardrails import (
-    build_context_budget_guard,
+    build_agent_state_compaction_middleware,
     build_param_aware_duplicate_tool_call_guard,
 )
 from src.memory import build_checkpointer, build_memory_middleware, build_store
@@ -14,7 +14,6 @@ from src.observability import configure_logging, build_observability_middleware
 from src.prompt import build_system_prompt
 from src.runtime import Context
 from src.skills import build_skill_middleware
-from src.summarization import build_summarization_middleware
 from src.tools import get_tools
 
 settings = load_settings()
@@ -34,14 +33,10 @@ tools = get_tools()
 checkpointer = build_checkpointer(settings.memory.checkpointer)
 store = build_store(settings.memory.store)
 middleware = [
-    *build_summarization_middleware(
-        settings=settings.summarization,
-        main_model=model,
-    ),
     build_skill_middleware(skills_root=Path("skills")),
     build_memory_middleware(),
     TodoListMiddleware(),
-    build_context_budget_guard(
+    build_agent_state_compaction_middleware(
         context_window_tokens=settings.llm.context_window_tokens,
     ),
     build_observability_middleware(redact=settings.observability.logging.redact),

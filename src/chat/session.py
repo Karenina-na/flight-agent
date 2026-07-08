@@ -28,11 +28,12 @@ class ChatSession:
     def config(self) -> dict:
         return {"configurable": {"thread_id": self.thread_id}}
 
-    def context(self) -> Context:
+    def context(self, *, current_user_input: str = "") -> Context:
         return build_default_context(
             user_id=APP_USER_ID,
             thread_id=self.thread_id,
             workspace_id=DEFAULT_WORKSPACE_ID,
+            current_user_input=current_user_input,
             metadata={"entrypoint": "web-ui"},
         )
 

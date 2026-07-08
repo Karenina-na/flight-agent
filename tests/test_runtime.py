@@ -28,6 +28,18 @@ def test_build_default_context_generates_correlation_ids():
     assert context.request_id.startswith("req_")
     assert context.run_id is not None
     assert context.run_id.startswith("run_")
+    assert context.current_user_input == ""
+    assert context.current_user_input_sha256 == ""
+
+
+def test_build_default_context_records_current_user_input_hash():
+    context = build_default_context(
+        user_id="u1",
+        current_user_input="查询未来 10 天北京到上海机票并汇总",
+    )
+
+    assert context.current_user_input == "查询未来 10 天北京到上海机票并汇总"
+    assert len(context.current_user_input_sha256) == 64
 
 
 def test_context_is_request_scoped_and_immutable():
@@ -49,6 +61,7 @@ def test_build_default_context_populates_generic_fields():
         timezone="UTC",
         environment="test",
         permissions=("memory:write",),
+        current_user_input="原始用户问题",
         metadata={"entrypoint": "pytest"},
     )
 
@@ -63,5 +76,7 @@ def test_build_default_context_populates_generic_fields():
         timezone="UTC",
         environment="test",
         permissions=("memory:write",),
+        current_user_input="原始用户问题",
+        current_user_input_sha256=context.current_user_input_sha256,
         metadata={"entrypoint": "pytest"},
     )

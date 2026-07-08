@@ -93,14 +93,17 @@ class ContextBudgetGuard(AgentMiddleware):
             preserve_latest_user_message=False,
         )
 
-        latest_human_text = _latest_human_text(request.messages)
+        latest_human_text = _current_user_goal(request)
         ledger_messages = _synthetic_ledger_messages(
             latest_human_text=latest_human_text,
             ledger=layered_state,
             estimate_chars=estimate,
             threshold_chars=round(threshold),
         )
-        recent_messages = raw_messages or [HumanMessage(content=latest_human_text)]
+        recent_messages = _recent_messages_with_current_goal(
+            raw_messages,
+            current_user_goal=latest_human_text,
+        )
         compact_request = request.override(
             messages=[*recent_messages, *ledger_messages],
         )
@@ -139,8 +142,33 @@ def _latest_human_text(messages: list[Any]) -> str:
     return ""
 
 
+def _current_user_goal(request: ModelRequest) -> str:
+    context = _request_context(request)
+    if context is not None and context.current_user_input:
+        return context.current_user_input
+    return _latest_human_text(request.messages)
+
+
 def _has_human_message(messages: list[Any]) -> bool:
     return any(str(getattr(message, "type", "")) == "human" for message in messages)
+
+
+def _recent_messages_with_current_goal(
+    raw_messages: list[Any],
+    *,
+    current_user_goal: str,
+) -> list[Any]:
+    if not current_user_goal:
+        return raw_messages
+    if any(
+        str(getattr(message, "type", "")) == "human"
+        and str(getattr(message, "content", "")) == current_user_goal
+        for message in raw_messages
+    ):
+        return raw_messages
+    if len(raw_messages) == 1 and str(getattr(raw_messages[0], "type", "")) == "human":
+        return [HumanMessage(content=current_user_goal)]
+    return [*raw_messages, HumanMessage(content=current_user_goal)]
 
 
 def _preview_text(text: str, limit: int) -> str:
@@ -235,7 +263,7 @@ def _log_context_budget_compacted(
         compacted_state_chars=len(compacted_state_text),
         compacted_state_sha256=sha256(compacted_state_text.encode("utf-8")).hexdigest(),
         compacted_prompt_sha256=sha256(
-            _latest_human_text(request.messages).encode("utf-8")
+            _current_user_goal(request).encode("utf-8")
         ).hexdigest(),
     )
 

@@ -1,6 +1,7 @@
 """Runtime context shared across one agent invocation."""
 
 from dataclasses import dataclass, field
+from hashlib import sha256
 from uuid import uuid4
 
 
@@ -18,6 +19,8 @@ class Context:
     timezone: str = "Asia/Shanghai"
     environment: str = "local"
     permissions: tuple[str, ...] = ()
+    current_user_input: str = ""
+    current_user_input_sha256: str = ""
     metadata: dict[str, str] = field(default_factory=dict)
 
 
@@ -33,9 +36,15 @@ def build_default_context(
     timezone: str = "Asia/Shanghai",
     environment: str = "local",
     permissions: tuple[str, ...] = (),
+    current_user_input: str = "",
     metadata: dict[str, str] | None = None,
 ) -> Context:
     """Build the default runtime context used by local demos and tests."""
+    current_user_input_sha256 = (
+        sha256(current_user_input.encode("utf-8")).hexdigest()
+        if current_user_input
+        else ""
+    )
     return Context(
         user_id=user_id,
         thread_id=thread_id,
@@ -47,6 +56,8 @@ def build_default_context(
         timezone=timezone,
         environment=environment,
         permissions=permissions,
+        current_user_input=current_user_input,
+        current_user_input_sha256=current_user_input_sha256,
         metadata=metadata or {},
     )
 

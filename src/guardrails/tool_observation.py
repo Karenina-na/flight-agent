@@ -12,6 +12,7 @@ DEFAULT_PREVIEW_CHARS = 500
 MAX_SHAPE_DEPTH = 3
 MAX_SAMPLE_ITEMS = 3
 MAX_STRING_SAMPLES = 5
+BATCH_TASK_PREVIEW_CHARS = 160
 
 
 @dataclass(frozen=True)
@@ -91,15 +92,22 @@ def build_tool_observations(messages: list[Any]) -> list[ToolObservation]:
         content_text = _content_text(content)
         parsed = _parse_json(content)
         result_value: Any = parsed if parsed is not None else content_text
+        result_shape = json_shape_summary(result_value)
+        result_preview = _truncate(_preview_text(result_value), DEFAULT_PREVIEW_CHARS)
+        result_stats = json_stats_summary(result_value)
+        if _is_batch_tool_result(result_value):
+            result_shape = _batch_result_shape(result_value)
+            result_preview = _batch_result_preview(result_value)
+            result_stats = _batch_result_stats(result_value)
         observations.append(
             ToolObservation(
                 tool_name=str(getattr(message, "name", "") or tool_call_names_by_id.get(tool_call_id) or "tool"),
                 tool_call_id=tool_call_id,
                 args=tool_call_args_by_id.get(tool_call_id) or _infer_args(result_value),
                 status=str(getattr(message, "status", "success") or "success"),
-                result_shape=json_shape_summary(result_value),
-                result_preview=_truncate(_preview_text(result_value), DEFAULT_PREVIEW_CHARS),
-                result_stats=json_stats_summary(result_value),
+                result_shape=result_shape,
+                result_preview=result_preview,
+                result_stats=result_stats,
                 content_sha256=sha256(content_text.encode("utf-8")).hexdigest(),
             )
         )
@@ -250,6 +258,14 @@ def _essential_shape(shape: dict[str, Any]) -> dict[str, Any]:
 
 
 def _essential_stats(stats: dict[str, Any]) -> dict[str, Any]:
+    if "batch_task_cards" in stats:
+        compact_batch: dict[str, Any] = {
+            "batch_task_count": stats.get("batch_task_count", 0),
+            "batch_task_cards": stats.get("batch_task_cards", []),
+        }
+        if "batch_summary" in stats:
+            compact_batch["batch_summary"] = stats["batch_summary"]
+        return compact_batch
     arrays = {
         path: {"length": data.get("length")}
         for path, data in stats.get("arrays", {}).items()
@@ -266,6 +282,91 @@ def _essential_stats(stats: dict[str, Any]) -> dict[str, Any]:
     if numbers:
         compact["numbers"] = numbers
     return compact
+
+
+def _is_batch_tool_result(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("batch_id"), str)
+        and isinstance(value.get("summary"), dict)
+        and isinstance(value.get("results"), list)
+    )
+
+
+def _batch_result_shape(value: dict[str, Any]) -> dict[str, Any]:
+    results = value.get("results") if isinstance(value.get("results"), list) else []
+    task_fields: set[str] = set()
+    task_tool_names: list[str] = []
+    task_statuses: dict[str, int] = {}
+    for task in results:
+        if not isinstance(task, dict):
+            continue
+        task_fields.update(str(key) for key in task.keys())
+        tool_name = str(task.get("tool_name") or "")
+        if tool_name and tool_name not in task_tool_names and len(task_tool_names) < MAX_STRING_SAMPLES:
+            task_tool_names.append(tool_name)
+        status = str(task.get("status") or "")
+        if status:
+            task_statuses[status] = task_statuses.get(status, 0) + 1
+    return {
+        "type": "object",
+        "keys": sorted(str(key) for key in value.keys()),
+        "batch_tool_result": True,
+        "task_count": len(results),
+        "task_fields": sorted(task_fields),
+        "task_tool_names_sample": task_tool_names,
+        "task_status_counts": task_statuses,
+    }
+
+
+def _batch_result_preview(value: dict[str, Any]) -> str:
+    preview = {
+        "batch_id": value.get("batch_id"),
+        "summary": value.get("summary"),
+        "limitations": value.get("limitations", []),
+    }
+    return _truncate(_preview_text(preview), DEFAULT_PREVIEW_CHARS)
+
+
+def _batch_result_stats(value: dict[str, Any]) -> dict[str, Any]:
+    results = value.get("results") if isinstance(value.get("results"), list) else []
+    task_cards = [
+        _batch_task_card(task)
+        for task in results
+        if isinstance(task, dict)
+    ]
+    return {
+        "batch_summary": value.get("summary") if isinstance(value.get("summary"), dict) else {},
+        "batch_task_count": len(results),
+        "batch_task_cards": task_cards,
+    }
+
+
+def _batch_task_card(task: dict[str, Any]) -> dict[str, Any]:
+    card: dict[str, Any] = {
+        "task_id": str(task.get("task_id") or ""),
+        "tool_name": str(task.get("tool_name") or ""),
+        "status": str(task.get("status") or ""),
+        "args": task.get("args") if isinstance(task.get("args"), dict) else {},
+    }
+    if "error_type" in task or "message" in task:
+        card["error_type"] = str(task.get("error_type") or "")
+        card["message"] = _truncate(str(task.get("message") or ""), BATCH_TASK_PREVIEW_CHARS)
+    result_shape = task.get("result_shape")
+    if isinstance(result_shape, dict):
+        card["result_shape"] = _essential_shape(result_shape)
+    result_stats = task.get("result_stats")
+    if isinstance(result_stats, dict):
+        compact_stats = _essential_stats(result_stats)
+        if compact_stats:
+            card["result_stats"] = compact_stats
+    result_preview = task.get("result_preview")
+    if result_preview not in (None, "", {}, []):
+        card["result_preview"] = _truncate(_preview_text(result_preview), BATCH_TASK_PREVIEW_CHARS)
+    content_sha256 = str(task.get("content_sha256") or "")
+    if content_sha256:
+        card["content_sha256"] = content_sha256[:16]
+    return card
 
 
 def _ledger_chars(

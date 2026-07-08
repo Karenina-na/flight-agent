@@ -27,6 +27,7 @@ def _request(
     messages: list,
     system_prompt: str = "Base prompt.",
     tools: list | None = None,
+    context: Context | None = None,
 ) -> ModelRequest:
     return ModelRequest(
         model=_model(),
@@ -34,7 +35,8 @@ def _request(
         system_prompt=system_prompt,
         tools=tools or [],
         runtime=SimpleNamespace(
-            context=Context(
+            context=context
+            or Context(
                 user_id="u1",
                 thread_id="thread-1",
                 request_id="request-1",
@@ -488,3 +490,60 @@ def test_context_budget_guard_compacts_old_turns_without_duplicating_raw_suffix(
     assert compact_request.messages[0].content == "第二轮：保留这个最近 turn 原文"
     assert compact_request.messages[1].content == "第二轮 assistant 原文：raw-suffix-marker"
     assert compact_request.messages[2].content == "第三轮：最新问题"
+
+
+def test_context_budget_guard_uses_runtime_user_goal_when_latest_human_is_summary():
+    guard = ContextBudgetGuard(context_window_tokens=10, max_fraction=0.10)
+    seen_requests: list[ModelRequest] = []
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        seen_requests.append(request)
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    request = _request(
+        messages=[
+            HumanMessage(content="Here is a summary of the conversation to date:"),
+            AIMessage(
+                content="继续查询批量任务。",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "name": "search_airfare_quotes",
+                        "args": {
+                            "origin": "北京",
+                            "destination": "上海",
+                            "departure_date": "2026-07-10",
+                        },
+                    }
+                ],
+            ),
+            ToolMessage(
+                content=_quote_payload("2026-07-10", 550, 700),
+                name="search_airfare_quotes",
+                tool_call_id="call-1",
+            ),
+        ],
+        system_prompt="system" * 100,
+        tools=[{"name": "search_airfare_quotes", "description": "tool" * 50}],
+        context=Context(
+            user_id="u1",
+            thread_id="thread-1",
+            request_id="request-1",
+            run_id="run-1",
+            current_user_input="请查询未来 10 天北京到上海机票并汇总报告",
+            current_user_input_sha256="manual-test-hash",
+        ),
+    )
+
+    guard.wrap_model_call(request, handler)
+
+    compact_request = seen_requests[0]
+    assert isinstance(compact_request.messages[0], HumanMessage)
+    assert compact_request.messages[0].content == "请查询未来 10 天北京到上海机票并汇总报告"
+    ai_message, tool_message = _ledger_messages(compact_request.messages)
+    assert (
+        ai_message.tool_calls[0]["args"]["latest_user_goal"]
+        == "请查询未来 10 天北京到上海机票并汇总报告"
+    )
+    assert "最近用户目标：请查询未来 10 天北京到上海机票并汇总报告" in tool_message.content
+    assert "最近用户目标：Here is a summary" not in tool_message.content

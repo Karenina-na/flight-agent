@@ -104,7 +104,7 @@ def _run_agent_turn_with_trace(
     trace_dir: Path | None,
     entrypoint: str,
 ) -> ChatTurnResult:
-    context = session.context()
+    context = session.context(current_user_input=message)
     agent_input = {"messages": [HumanMessage(content=message)]}
     agent_config = session.config
     assistant_parts: list[str] = []

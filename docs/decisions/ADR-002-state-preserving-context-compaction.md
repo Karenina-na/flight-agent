@@ -27,8 +27,8 @@ queried part of the range, forced final-answer compaction could correctly avoid
 fabricating missing results, but it could not continue the remaining work.
 
 ## Decision
-Use turn-aware, state-preserving context compaction as the default
-context-budget behavior.
+Use `AgentStateCompactionMiddleware` as the default state-preserving
+context-budget behavior for the active agent.
 
 When the request approaches the configured context budget, the agent now:
 
@@ -36,19 +36,27 @@ When the request approaches the configured context budget, the agent now:
 2. Compresses older turns into a layered context state.
 3. Injects that state as a protocol-valid synthetic tool observation.
 4. Preserves the original system prompt outside the compacted state.
-5. Preserves the latest user turn and a small number of recent turns as raw
-   messages.
-6. Preserves available tools and the original tool choice.
-7. Lets the ReAct workflow continue from the compressed state.
+5. Preserves the current user request from runtime context as a non-compressible
+   goal anchor.
+6. Preserves a small number of recent turns as raw messages when they are still
+   useful working context.
+7. Expands generic batch-tool results into per-task observation cards.
+8. Preserves available tools and the original tool choice.
+9. Lets the ReAct workflow continue from the compressed state.
 
 The compacted observation explicitly says it is historical working state, not a
 final-answer instruction. The model may continue calling tools when the compact
 state does not cover the user's current request.
 
+The active agent no longer wires the generic `SummarizationMiddleware` before
+state compaction. That middleware is still available as a module, but the main
+agent path avoids chat-summary messages as an intermediate representation for
+tool-heavy ReAct work.
+
 ## Design
 
 ### Trigger
-`ContextBudgetGuard` estimates the full model request size using the same
+`AgentStateCompactionMiddleware` estimates the full model request size using the same
 request trace representation used by observability:
 
 - system prompt
@@ -63,6 +71,28 @@ Compaction triggers when:
 
 If the only message is the latest user request, the guard does not compact
 because there is no historical state to preserve.
+
+### Current User Goal Anchor
+The current user request is stored in request-scoped runtime context as
+`current_user_input`, with `current_user_input_sha256` available for trace
+correlation. During compaction this value is treated as the active user goal and
+is preferred over the latest `HumanMessage` found in the message list.
+
+This distinction matters because upstream framework features or model-specific
+prompt templates can introduce summary-shaped human messages such as:
+
+```text
+Here is a summary of the conversation to date:
+```
+
+Those messages are useful as historical summaries, but they are not the user's
+current task. If the raw suffix does not already contain the runtime user goal,
+the compactor inserts the goal as a raw `HumanMessage`. If the suffix contains
+only a single summary-like human message, it is replaced by the runtime goal.
+
+This keeps the compacted request renderable by prompt templates that require a
+user message, while preventing the agent from losing the original task after
+multiple tool calls and compaction passes.
 
 ### Turn-Aware Partitioning
 Before building the compact state, the guard partitions messages into:
@@ -88,8 +118,8 @@ three layers:
 2. assistant visible execution state; and
 3. tool observations.
 
-The original system prompt is never moved into the compact state. The latest raw
-user message is also kept outside the compact state.
+The original system prompt is never moved into the compact state. The active
+runtime user goal is also kept outside the compact state.
 
 Historical user messages are stored as compact cards containing:
 
@@ -124,6 +154,33 @@ routes, or any domain-specific field names. It summarizes JSON-like results by
 structure and generic statistics such as array lengths, numeric min/max values,
 short string samples, null paths, and boolean counts.
 
+### Batch Tool Results
+Generic batch execution returns one outer `ToolMessage`, but that outer message
+can represent many completed sub-tasks. Treating it as one opaque JSON blob made
+the compacted state hard for the model and debug UI to inspect.
+
+When a tool result has the generic batch shape:
+
+```text
+batch_id
+summary
+results[]
+limitations
+```
+
+the observation builder creates a batch-aware card:
+
+- outer shape records that this is a batch result;
+- summary counts are preserved;
+- each sub-task keeps `task_id`, `tool_name`, `status`, `args`, compact
+  `result_shape`, compact `result_stats`, bounded preview, and result hash;
+- essential-mode compaction still keeps those sub-task cards before dropping the
+  whole outer observation.
+
+The compactor still does not interpret business fields inside task args or
+results. It only recognizes the generic batch envelope so one batch call can
+remain traceable as many completed tool actions.
+
 ### Budgeting Strategy
 The layered compactor first budgets the tool-observation ledger, then keeps
 historical user and assistant cards when space allows.
@@ -149,7 +206,7 @@ After compaction, the request keeps the original execution surface:
 system_prompt: original system prompt
 
 messages:
-  1. raw recent turn messages
+  1. raw recent turn messages, including the runtime current user goal
   2. AIMessage: synthetic tool call to context_observation_ledger
   3. ToolMessage: layered compact state for compressed older turns
 
@@ -172,7 +229,7 @@ Example shape:
 HumanMessage(...)
 AIMessage(...)
 ToolMessage(...)
-HumanMessage(latest user request)
+HumanMessage(runtime current user goal)
 AIMessage(tool_calls=[context_observation_ledger])
 ToolMessage(tool_call_id=same id, content=layered compact state)
 
@@ -220,6 +277,9 @@ final-answer fallback. It records:
 - `compacted_message_count`
 - `original_tool_count`
 - `compacted_tool_count`
+- `compacted_state_preview`
+- `compacted_state_sha256`
+- `compacted_prompt_sha256`
 
 The UI execution summary displays this as "上下文状态压缩" and explains that the
 agent can continue calling tools after compression.
@@ -286,7 +346,9 @@ added later inside specific tools or providers if needed.
 - Long ReAct turns can continue after compaction instead of being forced to
   answer prematurely.
 - Tools remain available after compaction.
+- The current user request is anchored outside message-history summaries.
 - The compressed prompt is less likely to lose successful historical tool calls.
+- Batch tool calls remain inspectable at the sub-task level after compaction.
 - Recent user turns can remain raw while older turns are compressed.
 - The same recent raw messages are no longer duplicated inside the compact
   ledger.
@@ -302,6 +364,9 @@ added later inside specific tools or providers if needed.
 - The ledger uses character-based budgeting, not tokenizer-level accounting.
 - The recent-turn retention rule currently keeps a fixed number of recent user
   turns raw. A future version may adapt this count based on remaining budget.
+- The batch-aware compactor recognizes a generic `batch_id` / `summary` /
+  `results` envelope, so other batch tools should reuse that shape for best
+  compaction behavior.
 - Observation previews are lossy by design. If a final answer needs full raw tool
   output that was trimmed, the agent may need to call a tool again or explain the
   missing detail.
@@ -319,3 +384,5 @@ added later inside specific tools or providers if needed.
 - Consider an optional tokenizer-backed estimator for models where character
   estimates are too loose.
 - Expose compacted ledger details more clearly in the debug trace page.
+- Consider removing the old `ContextBudgetGuard` compatibility name after
+  downstream imports have moved to `AgentStateCompactionMiddleware`.
