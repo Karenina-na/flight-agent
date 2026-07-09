@@ -38,6 +38,8 @@ middleware = [
     TodoListMiddleware(),
     build_agent_state_compaction_middleware(
         context_window_tokens=settings.llm.context_window_tokens,
+        summary_model=model,
+        semantic_enabled=settings.summarization.enabled,
     ),
     build_observability_middleware(redact=settings.observability.logging.redact),
     build_param_aware_duplicate_tool_call_guard(loop_stop_after=3),

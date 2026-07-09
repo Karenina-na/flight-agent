@@ -84,6 +84,17 @@ def _ledger_messages(messages: list) -> tuple[AIMessage, ToolMessage]:
     return ai_message, tool_message
 
 
+class FakeSummaryModel:
+    def __init__(self, responses: list[str] | None = None):
+        self.responses = responses or []
+        self.calls: list[object] = []
+
+    def invoke(self, messages: object) -> AIMessage:
+        self.calls.append(messages)
+        content = self.responses.pop(0) if self.responses else '{"facts":["摘要事实"],"open_items":[],"evidence_refs":[]}'
+        return AIMessage(content=content)
+
+
 def test_context_budget_guard_passes_through_small_requests():
     guard = ContextBudgetGuard(context_window_tokens=8192, max_fraction=0.85)
     seen_requests: list[ModelRequest] = []
@@ -477,6 +488,56 @@ def test_context_budget_guard_logs_full_synthetic_observation_preview_with_todo(
     assert fields["todo_snapshot_item_count"] == 1
     assert fields["todo_snapshot_dropped_count"] == 0
     assert fields["todo_snapshot_truncated_count"] == 0
+
+
+def test_context_budget_guard_records_l4_semantic_compaction_fields():
+    summary_model = FakeSummaryModel(
+        [
+            '{"facts":["局部事实"],"open_items":[],"evidence_refs":["tool_call:call-1"]}',
+            '{"facts":["全局事实"],"open_items":[],"evidence_refs":["summary:local"],"dropped_detail_notice":"细节已折叠"}',
+        ]
+    )
+    guard = ContextBudgetGuard(
+        context_window_tokens=10,
+        max_fraction=0.10,
+        summary_model=summary_model,
+        semantic_enabled=True,
+    )
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    request = _request(
+        messages=[
+            HumanMessage(content="第一轮：查询"),
+            ToolMessage(
+                content=_quote_payload("2026-07-08", 400, 430),
+                name="search_airfare_quotes",
+                tool_call_id="call-1",
+            ),
+            HumanMessage(content="现在汇总"),
+        ],
+        system_prompt="system" * 100,
+        tools=[{"name": "search_airfare_quotes", "description": "tool" * 2000}],
+    )
+
+    with collect_trace_events(trace_id="thread-1") as events:
+        guard.wrap_model_call(request, handler)
+
+    compact_event = next(
+        event
+        for event in events
+        if event["event"] == "react_context_budget_compacted"
+    )
+    fields = compact_event["fields"]
+    assert summary_model.calls
+    assert fields["compaction_level"] in {"l4_local_semantic", "l5_global_fallback"}
+    assert fields["semantic_summary_count"] >= 1
+    assert fields["semantic_summary_failed"] is False
+    assert (
+        "局部事实" in fields["compacted_state_preview"]
+        or "全局事实" in fields["compacted_state_preview"]
+    )
 
 
 def test_context_budget_guard_compacts_web_41e6d813_like_request():

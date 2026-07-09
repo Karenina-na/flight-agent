@@ -48,6 +48,16 @@ class ContextCompactionResult:
     raw_message_count: int
     layer_one_projection: LayerOneProjection
     todo_snapshot: dict[str, Any] | None = None
+    raw_messages: list[Any] | None = None
+    synthetic_message_builder: Any | None = None
+    compaction_level: str = "l1_l3"
+    local_semantic_summaries: list[dict[str, Any]] | None = None
+    global_fallback_summary: dict[str, Any] | None = None
+    semantic_summary_count: int = 0
+    semantic_summary_failed: bool = False
+    global_fallback_used: bool = False
+    post_compaction_chars: int = 0
+    still_over_budget: bool = False
 
 
 def build_context_compaction_request(
@@ -100,6 +110,18 @@ def build_context_compaction_request(
         raw_message_count=len(recent_messages),
         layer_one_projection=projection,
         todo_snapshot=todo_snapshot,
+        raw_messages=recent_messages,
+        synthetic_message_builder=lambda *,
+        local_semantic_summaries=None,
+        global_fallback_summary=None: synthetic_ledger_messages(
+            latest_human_text=latest_human_text,
+            ledger=layered_state,
+            estimate_chars=estimate_chars,
+            threshold_chars=threshold_chars,
+            todo_snapshot=todo_snapshot,
+            local_semantic_summaries=local_semantic_summaries or [],
+            global_fallback_summary=global_fallback_summary,
+        ),
     )
 
 
@@ -352,6 +374,8 @@ def synthetic_ledger_messages(
     estimate_chars: int,
     threshold_chars: int,
     todo_snapshot: dict[str, Any] | None = None,
+    local_semantic_summaries: list[dict[str, Any]] | None = None,
+    global_fallback_summary: dict[str, Any] | None = None,
 ) -> list[Any]:
     """Represent compacted historical state as a protocol-valid tool observation."""
     tool_call_id = synthetic_ledger_tool_call_id(ledger)
@@ -378,6 +402,8 @@ def synthetic_ledger_messages(
                 estimate_chars=estimate_chars,
                 threshold_chars=threshold_chars,
                 todo_snapshot=todo_snapshot,
+                local_semantic_summaries=local_semantic_summaries or [],
+                global_fallback_summary=global_fallback_summary,
             ),
             name=CONTEXT_LEDGER_TOOL_NAME,
             tool_call_id=tool_call_id,

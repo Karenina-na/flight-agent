@@ -28,12 +28,16 @@ fabricating missing results, but it could not continue the remaining work.
 
 ## Decision
 Use `AgentStateCompactionMiddleware` as the default state-preserving
-context-budget behavior for the active agent.
+context-budget behavior for the active agent. The middleware keeps guardrail
+responsibilities thin: it estimates request size, decides whether compaction is
+needed, calls the `summarization` context pipeline, and records trace metadata.
+The L1-L5 partitioning, rewriting, semantic summary, and final transient message
+assembly live in the summarization layer.
 
 When the request approaches the configured context budget, the agent now:
 
 1. Splits the message history on user-turn boundaries.
-2. Compresses older turns into a layered context state.
+2. Compresses older turns through the `summarization` context pipeline.
 3. Injects that state as a protocol-valid synthetic tool observation.
 4. Preserves the original system prompt outside the compacted state.
 5. Preserves the current user request from runtime context as a non-compressible
@@ -109,6 +113,33 @@ raw messages.
 For single-user-turn histories, the latest `HumanMessage` is kept raw, while the
 execution messages after that user request can still be compressed. This handles
 long one-shot ReAct workflows such as "query many dates and then summarize".
+
+### Layered Context Pipeline
+
+After budget pressure triggers, `src/summarization/context_pipeline.py`
+constructs the transient compacted request in stages:
+
+1. L1-L3 deterministic compaction via `build_context_compaction_request()`.
+2. L4 local semantic summary if the deterministic request is still over budget
+   and semantic compaction is enabled.
+3. L5 global fallback summary if L4 is still over budget.
+
+The pipeline uses partitioned context assembly rather than appending summary
+text directly to ordinary history. Protected todo state, recent raw messages,
+the active user goal, deterministic history ledger, local semantic summaries,
+and global fallback summary are treated as separate partitions and rendered into
+one protocol-valid synthetic context observation.
+
+L4/L5 summary prompts live in `src/prompt/context_summary.py`. They require a
+JSON object with `facts`, `open_items`, and `evidence_refs`. If the summary
+model raises, times out through the caller, or returns invalid JSON, the request
+falls back to the deterministic L1-L3 compacted view and records the semantic
+failure in trace metadata.
+
+Todo is protected state. It is not summarized as ordinary history. The semantic
+summary input receives only a count-level todo reference, while the final
+context ledger still receives the bounded todo snapshot so status and ordering
+survive.
 
 ### Layered Context State
 The compressed prefix is represented as a generic layered context state with
@@ -281,6 +312,12 @@ final-answer fallback. It records:
 - `todo_snapshot_total_count`
 - `todo_snapshot_dropped_count`
 - `todo_snapshot_truncated_count`
+- `compaction_level`
+- `semantic_summary_count`
+- `semantic_summary_failed`
+- `global_fallback_used`
+- `post_compaction_chars`
+- `still_over_budget`
 - `compacted_state_preview`
 - `compacted_state_sha256`
 - `compacted_prompt_sha256`
@@ -368,8 +405,9 @@ added later inside specific tools or providers if needed.
 
 ## Known Limitations
 
-- There is not yet a second-level hard fallback if the state-preserving compacted
-  request is still too large.
+- L4/L5 semantic compaction now provides a second-level fallback path, but it
+  still uses character-based estimates and can report `still_over_budget=true`
+  if even the global fallback view remains too large.
 - The ledger uses character-based budgeting, not tokenizer-level accounting.
 - The recent-turn retention rule currently keeps a fixed number of recent user
   turns raw. A future version may adapt this count based on remaining budget.
@@ -385,9 +423,8 @@ added later inside specific tools or providers if needed.
 
 ## Follow-Up Work
 
-- Add a hard fallback mode only when state-preserving compaction still exceeds
-  the request budget.
-- Add tests for compacted requests that remain over budget.
+- Consider whether `still_over_budget=true` should trigger a stricter
+  final-resort policy for extremely large sessions.
 - Improve retention of recent valid `AIMessage(tool_calls) -> ToolMessage`
   sequences if future workflows need to preserve active tool-call structure.
 - Consider an optional tokenizer-backed estimator for models where character

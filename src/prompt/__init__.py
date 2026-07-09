@@ -8,6 +8,7 @@ from src.prompt.context_budget import (
     build_context_ledger_tool_call_args,
     build_context_ledger_tool_observation,
 )
+from src.prompt.context_summary import build_semantic_summary_messages
 from src.prompt.middleware import (
     build_memory_prompt_addendum,
     build_skill_prompt_addendum,
@@ -21,6 +22,7 @@ __all__ = [
     "build_context_compaction_user_prompt",
     "build_context_ledger_tool_call_args",
     "build_context_ledger_tool_observation",
+    "build_semantic_summary_messages",
     "build_memory_prompt_addendum",
     "build_skill_prompt_addendum",
     "build_system_prompt",

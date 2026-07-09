@@ -4,7 +4,7 @@
 
 **Goal:** Replace always-on ReAct hygiene cleanup with an on-demand, layered context compaction pipeline that activates only when the model request approaches or exceeds the context budget.
 
-**Architecture:** Normal agent runs keep original LangGraph/checkpointer/session messages untouched and send them to the model as-is. When a model request crosses the configured compaction threshold, `ContextBudgetGuard` builds a transient compacted request view through five deterministic-to-expensive layers, then calls the model with `request.override(messages=...)`. Raw checkpoint, trace, and debug data remain complete.
+**Architecture:** Normal agent runs keep original LangGraph/checkpointer/session messages untouched and send them to the model as-is. When a model request crosses the configured compaction threshold, `ContextBudgetGuard` delegates to the `summarization` context pipeline, which builds a transient compacted request view through five deterministic-to-expensive layers, then calls the model with `request.override(messages=...)`. Raw checkpoint, trace, and debug data remain complete.
 
 **Tech Stack:** Python 3.12, LangChain/LangGraph middleware, pytest, existing `src/guardrails/context_budget_guard.py`, `src/summarization/context_compaction.py`, `src/summarization/layered_context.py`, `src/summarization/tool_observation.py`, `src/chat/trace.py`, and `src/chat/runner.py`.
 
@@ -257,15 +257,30 @@ assert seen_requests[0] is request
 - [x] Bound todo snapshot size to avoid re-inflating compacted context.
 - [x] Do not make the model call todo tools during compression.
 
-### Task 5: Add LLM-Backed Layers 4-5 Later
+### Task 5: Add LLM-Backed Layers 4-5
 
 **Files:**
-- Future: `src/summarization/` or `src/guardrails/context_summary.py`
-- Future tests: isolated summary prompt tests and failure fallback tests
+- Add: `src/summarization/context_pipeline.py`
+- Add: `src/prompt/context_summary.py`
+- Test: `tests/test_context_pipeline.py`
+- Modify: `src/guardrails/context_budget_guard.py`, `src/guardrails/agent_state_compaction.py`, `src/agent.py`
 
-- [ ] Layer 4: historical turn folding to objective summaries.
-- [ ] Layer 5: global fallback facts list.
-- [ ] LLM summary failure must fall back to deterministic compressed view, never fail the user request.
+- [x] Move L1-L5 orchestration into `src/summarization/context_pipeline.py`.
+- [x] Keep `ContextBudgetGuard` focused on threshold detection, pipeline invocation, and trace metadata.
+- [x] Layer 4: when L1-L3 remains over budget, call the configured summary model with a bounded context view and inject a `local_semantic_summary`.
+- [x] Layer 5: when L4 remains over budget, call the summary model again using the current bounded assembly and inject a `global_fallback_summary`.
+- [x] Summary prompts live in `src/prompt/context_summary.py` and require structured JSON with `facts`, `open_items`, and `evidence_refs`.
+- [x] LLM summary failure falls back to the deterministic L1-L3 compacted view and records `semantic_summary_failed=true`.
+- [x] Todo remains protected state: the semantic summary model receives only a count-level todo reference, while the final synthetic ledger keeps the compact todo snapshot.
+
+Current implementation:
+
+- `build_context_pipeline_request()` first builds the deterministic L1-L3 compacted request through `build_context_compaction_request()`.
+- If the compacted request is already within budget, no summary model is called and `compaction_level="l1_l3"`.
+- If semantic compression is enabled and a summary model is available, L4 generates a local semantic summary from a bounded assembly containing protected todo metadata, deterministic history ledger, and existing semantic summaries.
+- If L4 is still oversized, L5 replaces local semantic detail with a global fallback summary while preserving raw recent messages, the latest user goal, protected todo snapshot, and the protocol-valid synthetic context ledger pair.
+- `settings.summarization.enabled=false` disables L4/L5 and keeps the pipeline deterministic.
+- Trace metadata includes `compaction_level`, `semantic_summary_count`, `semantic_summary_failed`, `global_fallback_used`, `post_compaction_chars`, and `still_over_budget`.
 
 ---
 

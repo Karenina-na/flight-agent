@@ -14,8 +14,8 @@ from src.prompt import build_context_ledger_tool_observation
 from src.runtime import Context
 from src.summarization.context_compaction import (
     ContextCompactionResult,
-    build_context_compaction_request,
 )
+from src.summarization.context_pipeline import build_context_pipeline_request
 from src.summarization.layered_context import has_compressible_history
 
 
@@ -42,6 +42,8 @@ class ContextBudgetGuard(AgentMiddleware):
         min_ledger_budget_chars: int = DEFAULT_MIN_LEDGER_BUDGET_CHARS,
         raw_recent_turns: int = DEFAULT_RAW_RECENT_TURNS,
         max_tool_facts: int | None = None,
+        summary_model: Any | None = None,
+        semantic_enabled: bool = True,
     ) -> None:
         self.context_window_tokens = context_window_tokens
         self.max_fraction = max_fraction
@@ -50,6 +52,8 @@ class ContextBudgetGuard(AgentMiddleware):
         self.min_ledger_budget_chars = min_ledger_budget_chars
         self.raw_recent_turns = raw_recent_turns
         self.max_tool_facts = max_tool_facts
+        self.summary_model = summary_model
+        self.semantic_enabled = semantic_enabled
 
     def wrap_model_call(
         self,
@@ -86,7 +90,7 @@ class ContextBudgetGuard(AgentMiddleware):
         threshold_chars: int,
     ) -> ModelRequest:
         """Build a transient compacted model request after budget pressure triggers."""
-        compaction_result = build_context_compaction_request(
+        compaction_result = build_context_pipeline_request(
             request,
             latest_human_text=_current_user_goal(request),
             estimate_chars=estimate_chars,
@@ -94,6 +98,9 @@ class ContextBudgetGuard(AgentMiddleware):
             ledger_fraction=self.ledger_fraction,
             min_ledger_budget_chars=self.min_ledger_budget_chars,
             raw_recent_turns=self.raw_recent_turns,
+            estimate_request_chars=_request_size_estimate,
+            semantic_enabled=self.semantic_enabled,
+            summary_model=self.summary_model,
         )
         if compaction_result is None:
             return request
@@ -158,6 +165,8 @@ def _log_context_budget_compacted(
         estimate_chars=estimate_chars,
         threshold_chars=threshold_chars,
         todo_snapshot=compaction_result.todo_snapshot,
+        local_semantic_summaries=compaction_result.local_semantic_summaries or [],
+        global_fallback_summary=compaction_result.global_fallback_summary,
     )
     compacted_state_preview = _preview_text(
         compacted_state_text,
@@ -203,6 +212,12 @@ def _log_context_budget_compacted(
         layer1_duplicate_tool_output_count=projection.duplicate_tool_output_count,
         layer1_empty_tool_output_count=projection.empty_tool_output_count,
         compaction_mode=ledger.strategy,
+        compaction_level=compaction_result.compaction_level,
+        semantic_summary_count=compaction_result.semantic_summary_count,
+        semantic_summary_failed=compaction_result.semantic_summary_failed,
+        global_fallback_used=compaction_result.global_fallback_used,
+        post_compaction_chars=compaction_result.post_compaction_chars,
+        still_over_budget=compaction_result.still_over_budget,
         compacted_state_preview=compacted_state_preview,
         compacted_state_preview_chars=len(compacted_state_preview),
         compacted_state_chars=len(compacted_state_text),

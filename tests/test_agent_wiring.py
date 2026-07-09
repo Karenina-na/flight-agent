@@ -16,6 +16,8 @@ def test_agent_middleware_is_flat_and_includes_observability_skills_and_memory()
     assert isinstance(middleware[1], MemoryMiddleware)
     assert isinstance(middleware[2], TodoListMiddleware)
     assert isinstance(middleware[3], AgentStateCompactionMiddleware)
+    assert middleware[3].summary_model is not None
+    assert middleware[3].semantic_enabled is True
     assert isinstance(middleware[4], ObservabilityMiddleware)
     assert isinstance(middleware[5], ParamAwareDuplicateToolCallGuard)
     assert middleware[5].loop_stop_after == 3

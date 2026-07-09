@@ -43,6 +43,8 @@ def build_context_ledger_tool_observation(
     estimate_chars: int,
     threshold_chars: int,
     todo_snapshot: dict[str, Any] | None = None,
+    local_semantic_summaries: list[dict[str, Any]] | None = None,
+    global_fallback_summary: dict[str, Any] | None = None,
 ) -> str:
     """Build the synthetic tool observation that restores compacted working state."""
     todo_section = ""
@@ -54,10 +56,24 @@ def build_context_ledger_tool_observation(
             "用于帮助继续执行未完成任务。\n"
             f"{json.dumps(todo_snapshot, ensure_ascii=False, indent=2)}\n\n"
         )
+    semantic_section = ""
+    if local_semantic_summaries:
+        semantic_section += (
+            "## Local semantic summaries\n\n"
+            "以下 local_semantic_summary 是旧历史块的模型摘要，已按 facts/open_items/evidence_refs 结构化。\n"
+            f"{json.dumps(local_semantic_summaries, ensure_ascii=False, indent=2, default=str)}\n\n"
+        )
+    if global_fallback_summary:
+        semantic_section += (
+            "## Global fallback summary\n\n"
+            "以下 global_fallback_summary 是预算兜底事实清单，只能作为历史状态参考。\n"
+            f"{json.dumps(global_fallback_summary, ensure_ascii=False, indent=2, default=str)}\n\n"
+        )
     return (
         "## 压缩后的历史工作状态\n\n"
         f"最近用户目标：{original_user_message}\n\n"
         f"{todo_section}"
+        f"{semantic_section}"
         "以下是压缩后的分层历史状态，包含历史用户消息摘要、assistant 可见执行状态摘要、"
         "以及已完成工具调用的工具观察账本。每条 tool observation 的 args 是实际调用参数，"
         "result_shape/result_stats/result_preview 是工具结果的通用摘要。\n"
@@ -80,6 +96,8 @@ def build_context_compaction_user_prompt(
     estimate_chars: int,
     threshold_chars: int,
     todo_snapshot: dict[str, Any] | None = None,
+    local_semantic_summaries: list[dict[str, Any]] | None = None,
+    global_fallback_summary: dict[str, Any] | None = None,
 ) -> str:
     """Backward-compatible alias for the context ledger observation text."""
     return build_context_ledger_tool_observation(
@@ -88,6 +106,8 @@ def build_context_compaction_user_prompt(
         estimate_chars=estimate_chars,
         threshold_chars=threshold_chars,
         todo_snapshot=todo_snapshot,
+        local_semantic_summaries=local_semantic_summaries,
+        global_fallback_summary=global_fallback_summary,
     )
 
 
