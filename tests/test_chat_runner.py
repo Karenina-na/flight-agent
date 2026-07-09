@@ -3,6 +3,7 @@ import json
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from src.chat.runner import (
+    conversation_trace_payload,
     debug_summary_payload,
     execution_step_summaries,
     fallback_answer_from_tool_results,
@@ -736,6 +737,33 @@ def test_run_agent_turn_logs_and_writes_multi_turn_trace(tmp_path):
         "agent_run_end",
         "conversation_turn_end",
     ]
+
+
+def test_run_agent_turn_exposes_live_trace_during_invoke(tmp_path):
+    live_snapshots = []
+    session = ChatSession(thread_id="web-live")
+
+    class InspectingAgent:
+        def invoke(self, *args, **kwargs):
+            live_snapshots.append(conversation_trace_payload(session))
+            return {"messages": [AIMessage(content="完成")]}
+
+    result = run_agent_turn(
+        "执行中问题",
+        session,
+        agent_instance=InspectingAgent(),
+        trace_dir=tmp_path / "traces",
+    )
+
+    live_trace = live_snapshots[0]
+    assert live_trace["turn_count"] == 1
+    assert live_trace["event_count"] == 2
+    assert live_trace["turns"][0]["status"] == "running"
+    assert live_trace["turns"][0]["calls"][0]["event"] == "conversation_turn_start"
+    assert live_trace["turns"][0]["calls"][1]["event"] == "agent_run_start"
+    assert result.status == "success"
+    assert session.live_turn is None
+    assert session.live_events == []
 
 
 def test_run_agent_turn_falls_back_when_final_message_has_no_visible_text(tmp_path):

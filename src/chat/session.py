@@ -19,6 +19,8 @@ class ChatSession:
     thread_id: str
     turns: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
+    live_turn: dict[str, Any] | None = None
+    live_events: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def new(cls) -> "ChatSession":

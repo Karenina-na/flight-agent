@@ -127,6 +127,8 @@ def _run_agent_turn_with_trace(
         "stream_chunks": [],
         "invoke_output": None,
     }
+    session.live_turn = turn_trace
+    session.live_events = trace_events
 
     log_event(
         "conversation_turn_start",
@@ -247,6 +249,8 @@ def _run_agent_turn_with_trace(
         **full_text_trace_fields("assistant_output", assistant_output),
     )
     session.events.extend(trace_events)
+    session.live_turn = None
+    session.live_events = []
     trace_path = write_conversation_trace_dump(
         thread_id=session.thread_id,
         turns=session.turns,
@@ -400,6 +404,8 @@ def _finish_error_turn(
         **full_text_trace_fields("partial_assistant_output", partial_output),
     )
     session.events.extend(trace_events)
+    session.live_turn = None
+    session.live_events = []
     trace_path = write_conversation_trace_dump(
         thread_id=session.thread_id,
         turns=session.turns,
@@ -424,13 +430,18 @@ def _finish_error_turn(
 
 def conversation_trace_payload(session: ChatSession) -> dict[str, Any]:
     """Return the full in-memory multi-turn trace for the Web UI."""
-    merged_turns = merge_trace_events_into_turns(session.turns, session.events)
+    turns = list(session.turns)
+    events = list(session.events)
+    if session.live_turn is not None:
+        turns.append(session.live_turn)
+        events.extend(session.live_events)
+    merged_turns = merge_trace_events_into_turns(turns, events)
     payload = {
         "thread_id": session.thread_id,
-        "turn_count": len(session.turns),
-        "event_count": len(session.events),
+        "turn_count": len(merged_turns),
+        "event_count": len(events),
         "turns": json_safe(merged_turns),
-        "events": json_safe(session.events),
+        "events": json_safe(events),
     }
     payload["tree"] = build_trace_tree(payload)
     return payload

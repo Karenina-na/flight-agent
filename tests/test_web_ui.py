@@ -68,6 +68,48 @@ def test_web_app_trace_state_uses_revision_to_skip_full_payload():
     }
 
 
+def test_web_app_trace_state_includes_running_turn_and_live_events():
+    app = WebApp()
+    app.session.live_turn = {
+        "turn_index": 0,
+        "status": "running",
+        "turn_id": "req-live",
+        "user_input": "查一下北京到上海",
+        "assistant_chunks": [],
+        "reasoning_chunks": [],
+        "stream_chunks": [],
+    }
+    app.session.live_events = [
+        {
+            "event": "conversation_turn_start",
+            "level": "INFO",
+            "fields": {
+                "thread_id": app.session.thread_id,
+                "trace_id": app.session.thread_id,
+                "turn_id": "req-live",
+            },
+        },
+        {
+            "event": "model_call_start",
+            "level": "INFO",
+            "fields": {
+                "thread_id": app.session.thread_id,
+                "trace_id": app.session.thread_id,
+                "turn_id": "req-live",
+            },
+        },
+    ]
+
+    payload = app.trace_state()
+
+    assert payload["status"] == "running"
+    assert payload["trace"]["turn_count"] == 1
+    assert payload["trace"]["event_count"] == 2
+    assert payload["trace"]["turns"][0]["status"] == "running"
+    assert payload["trace"]["turns"][0]["calls"][0]["event"] == "conversation_turn_start"
+    assert "req-live" in payload["trace_revision"]
+
+
 def test_web_app_chat_appends_user_and_assistant_messages(monkeypatch, tmp_path):
     def fake_run_agent_turn(message, session, entrypoint):
         assert message == "查一下北京机场"

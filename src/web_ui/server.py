@@ -53,6 +53,7 @@ class WebApp:
     def trace_revision(self) -> str:
         """Return a cheap revision marker for trace polling."""
         last_turn = self.session.turns[-1] if self.session.turns else {}
+        live_turn = self.session.live_turn or {}
         last_marker = ""
         if isinstance(last_turn, dict):
             last_marker = str(
@@ -61,11 +62,21 @@ class WebApp:
                 or last_turn.get("status")
                 or ""
             )
+        live_marker = ""
+        if isinstance(live_turn, dict):
+            live_marker = str(
+                live_turn.get("turn_id")
+                or live_turn.get("started_at")
+                or live_turn.get("status")
+                or ""
+            )
         return (
             f"{self.session.thread_id}:"
             f"{len(self.session.turns)}:"
             f"{len(self.session.events)}:"
-            f"{last_marker}"
+            f"{len(self.session.live_events)}:"
+            f"{last_marker}:"
+            f"{live_marker}"
         )
 
     def trace_state(self, known_revision: str | None = None) -> dict[str, Any]:
@@ -81,7 +92,7 @@ class WebApp:
         trace = self.trace_payload()
         return {
             "thread_id": self.session.thread_id,
-            "status": "ready",
+            "status": "running" if self.session.live_turn is not None else "ready",
             "trace_revision": revision,
             "trace": trace,
             "debug_summary": self.debug_summary(trace),
