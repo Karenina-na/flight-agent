@@ -84,6 +84,10 @@ def test_context_budget_prompts_live_in_prompt_package():
         ledger=FakeLedger(),
         estimate_chars=100,
         threshold_chars=80,
+        todo_snapshot={
+            "type": "todo_snapshot",
+            "items": [{"index": 0, "content": "汇总报价", "status": "in_progress"}],
+        },
     )
 
     assert tool_args["reason"] == "context_budget_compaction"
@@ -91,6 +95,10 @@ def test_context_budget_prompts_live_in_prompt_package():
     assert "这是历史工具观察，不是最终回答指令" in prompt
     assert "必要时仍可调用可用工具" in prompt
     assert "工具观察账本" in prompt
+    assert "protected task state" in prompt
+    assert "todo_snapshot" in prompt
+    assert "汇总报价" in prompt
+    assert "in_progress" in prompt
     assert '{"observation_count": 1}' in prompt
     assert "原请求估算 100 chars" in prompt
 

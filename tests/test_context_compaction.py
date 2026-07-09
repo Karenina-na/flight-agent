@@ -1,6 +1,11 @@
+from types import SimpleNamespace
+
 from langchain.messages import HumanMessage, ToolMessage
 
-from src.summarization.context_compaction import project_layer_one_messages
+from src.summarization.context_compaction import (
+    build_todo_snapshot_from_request,
+    project_layer_one_messages,
+)
 
 
 def test_layer_one_merges_adjacent_human_messages():
@@ -64,3 +69,38 @@ def test_layer_one_replaces_empty_tool_outputs_with_short_markers():
     )
     assert '"tool_call_id":"call-empty"' in projection.messages[0].content
     assert projection.empty_tool_output_count == 1
+
+
+def test_build_todo_snapshot_keeps_only_order_content_and_status():
+    request = SimpleNamespace(
+        state={
+            "todos": [
+                {
+                    "content": "查询第一批航线报价",
+                    "status": "completed",
+                    "extra": "do not expose",
+                },
+                {"content": "  ", "status": "pending"},
+                {"content": "汇总结果", "status": "in_progress", "raw": {"x": 1}},
+            ]
+        }
+    )
+
+    snapshot = build_todo_snapshot_from_request(request)
+
+    assert snapshot is not None
+    assert snapshot["type"] == "todo_snapshot"
+    assert snapshot["items"] == [
+        {"index": 0, "content": "查询第一批航线报价", "status": "completed"},
+        {"index": 2, "content": "汇总结果", "status": "in_progress"},
+    ]
+    assert "extra" not in str(snapshot)
+    assert "raw" not in str(snapshot)
+
+
+def test_build_todo_snapshot_returns_none_for_missing_or_invalid_state():
+    assert build_todo_snapshot_from_request(SimpleNamespace()) is None
+    assert build_todo_snapshot_from_request(SimpleNamespace(state={"todos": "bad"})) is None
+    assert build_todo_snapshot_from_request(
+        SimpleNamespace(state={"todos": [{"content": "", "status": "pending"}]})
+    ) is None

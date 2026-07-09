@@ -177,6 +177,9 @@ def _log_context_budget_compacted(
         original_message_count=len(request.messages),
         compacted_message_count=len(compaction_result.request.messages),
         raw_message_count=compaction_result.raw_message_count,
+        todo_snapshot_item_count=len(
+            (compaction_result.todo_snapshot or {}).get("items", [])
+        ),
         original_tool_count=len(request.tools),
         compacted_tool_count=len(request.tools),
         layer1_reasoning_block_removed_count=projection.reasoning_block_removed_count,

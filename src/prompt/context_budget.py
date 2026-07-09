@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+import json
+from typing import Any, Protocol
 
 
 class ObservationLedgerPrompt(Protocol):
@@ -41,11 +42,22 @@ def build_context_ledger_tool_observation(
     ledger: ObservationLedgerPrompt,
     estimate_chars: int,
     threshold_chars: int,
+    todo_snapshot: dict[str, Any] | None = None,
 ) -> str:
     """Build the synthetic tool observation that restores compacted working state."""
+    todo_section = ""
+    if todo_snapshot:
+        todo_section = (
+            "## Protected task state\n\n"
+            "以下 todo_snapshot 是压缩触发时从任务状态读取的 protected task state，"
+            "不是普通历史消息，也不参与工具观察账本压缩。它只保留任务顺序、content 和 status，"
+            "用于帮助继续执行未完成任务。\n"
+            f"{json.dumps(todo_snapshot, ensure_ascii=False, indent=2)}\n\n"
+        )
     return (
         "## 压缩后的历史工作状态\n\n"
         f"最近用户目标：{original_user_message}\n\n"
+        f"{todo_section}"
         "以下是压缩后的分层历史状态，包含历史用户消息摘要、assistant 可见执行状态摘要、"
         "以及已完成工具调用的工具观察账本。每条 tool observation 的 args 是实际调用参数，"
         "result_shape/result_stats/result_preview 是工具结果的通用摘要。\n"
@@ -67,6 +79,7 @@ def build_context_compaction_user_prompt(
     ledger: ObservationLedgerPrompt,
     estimate_chars: int,
     threshold_chars: int,
+    todo_snapshot: dict[str, Any] | None = None,
 ) -> str:
     """Backward-compatible alias for the context ledger observation text."""
     return build_context_ledger_tool_observation(
@@ -74,6 +87,7 @@ def build_context_compaction_user_prompt(
         ledger=ledger,
         estimate_chars=estimate_chars,
         threshold_chars=threshold_chars,
+        todo_snapshot=todo_snapshot,
     )
 
 

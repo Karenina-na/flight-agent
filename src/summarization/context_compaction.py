@@ -43,6 +43,7 @@ class ContextCompactionResult:
     ledger: CompactLayeredContextState
     raw_message_count: int
     layer_one_projection: LayerOneProjection
+    todo_snapshot: dict[str, Any] | None = None
 
 
 def build_context_compaction_request(
@@ -76,6 +77,7 @@ def build_context_compaction_request(
         raw_messages,
         current_user_goal=latest_human_text,
     )
+    todo_snapshot = build_todo_snapshot_from_request(request)
     compact_request = request.override(
         messages=[
             *recent_messages,
@@ -84,6 +86,7 @@ def build_context_compaction_request(
                 ledger=layered_state,
                 estimate_chars=estimate_chars,
                 threshold_chars=threshold_chars,
+                todo_snapshot=todo_snapshot,
             ),
         ],
     )
@@ -92,7 +95,47 @@ def build_context_compaction_request(
         ledger=layered_state,
         raw_message_count=len(recent_messages),
         layer_one_projection=projection,
+        todo_snapshot=todo_snapshot,
     )
+
+
+def build_todo_snapshot_from_request(request: ModelRequest) -> dict[str, Any] | None:
+    """Extract compact protected todo state from a model request, if available."""
+    state = getattr(request, "state", None)
+    if not isinstance(state, dict):
+        return None
+    todos = state.get("todos")
+    if not isinstance(todos, list):
+        return None
+
+    items: list[dict[str, str | int]] = []
+    for index, todo in enumerate(todos):
+        if not isinstance(todo, dict):
+            continue
+        content = todo.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        status = todo.get("status")
+        if not isinstance(status, str) or not status.strip():
+            status = "unknown"
+        items.append(
+            {
+                "index": index,
+                "content": content.strip(),
+                "status": status.strip(),
+            }
+        )
+
+    if not items:
+        return None
+    return {
+        "type": "todo_snapshot",
+        "items": items,
+        "instruction": (
+            "Continue from pending/in_progress items. If task state changes, "
+            "update todos with the todo tool."
+        ),
+    }
 
 
 def recent_messages_with_current_goal(
@@ -277,6 +320,7 @@ def synthetic_ledger_messages(
     ledger: CompactLayeredContextState,
     estimate_chars: int,
     threshold_chars: int,
+    todo_snapshot: dict[str, Any] | None = None,
 ) -> list[Any]:
     """Represent compacted historical state as a protocol-valid tool observation."""
     tool_call_id = synthetic_ledger_tool_call_id(ledger)
@@ -302,6 +346,7 @@ def synthetic_ledger_messages(
                 ledger=ledger,
                 estimate_chars=estimate_chars,
                 threshold_chars=threshold_chars,
+                todo_snapshot=todo_snapshot,
             ),
             name=CONTEXT_LEDGER_TOOL_NAME,
             tool_call_id=tool_call_id,

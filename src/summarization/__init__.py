@@ -4,6 +4,7 @@ from src.summarization.context_compaction import (
     ContextCompactionResult,
     LayerOneProjection,
     build_context_compaction_request,
+    build_todo_snapshot_from_request,
 )
 from src.summarization.layered_context import (
     CompactLayeredContextState,
@@ -28,6 +29,7 @@ __all__ = [
     "LayerOneProjection",
     "ToolObservation",
     "build_context_compaction_request",
+    "build_todo_snapshot_from_request",
     "build_layered_context_state",
     "build_summarization_middleware",
     "build_tool_observations",

@@ -138,6 +138,14 @@ Suggested compact todo shape:
 
 Todo should therefore be **outside the five generic compression targets**. It is injected or preserved as a compact structured snapshot when compaction is active.
 
+Current implementation:
+
+- `ContextBudgetGuard` only reads todo state after context-budget compaction is triggered.
+- Todo state is read by duck-typing `ModelRequest.state["todos"]`; if the state is missing or malformed, compaction continues without todo injection.
+- The compact snapshot keeps only `index`, `content`, and `status`; raw todo tool calls, reasoning, extra metadata, and historical messages are not copied into the compacted context.
+- The snapshot is rendered inside the synthetic context ledger tool observation before the compressed historical state, so it acts as protected task state rather than ordinary chat/tool history.
+- Under-budget requests remain unchanged and do not receive any todo snapshot.
+
 ---
 
 ## Tool Result Policy
@@ -233,12 +241,17 @@ assert seen_requests[0] is request
 
 **Files:**
 - Modify: `src/guardrails/context_budget_guard.py`
-- Inspect/modify if needed: todo middleware integration code
-- Test: add focused tests near context budget tests or todo middleware tests
+- Modify: `src/summarization/context_compaction.py`
+- Modify: `src/prompt/context_budget.py`
+- Test: `tests/test_context_compaction.py`, `tests/test_context_budget_guard.py`, `tests/test_prompt_builder.py`
 
-- [ ] Discover where TodoListMiddleware state is available in request/runtime/checkpoint.
-- [ ] If accessible, include compact todo snapshot only after compaction triggers.
-- [ ] If not accessible, document that todo snapshot support is deferred and do not make the model call todo tools during compression.
+- [x] Read todo state from `ModelRequest.state["todos"]` with duck typing, without importing middleware-private state types.
+- [x] Include compact todo snapshot only after context-budget compaction triggers.
+- [x] Keep under-budget requests unchanged, even if todo state exists.
+- [x] Skip malformed todo state and empty todo items without raising.
+- [x] Render the todo snapshot as protected task state inside the synthetic context ledger observation.
+- [x] Add trace metadata for `todo_snapshot_item_count`.
+- [x] Do not make the model call todo tools during compression.
 
 ### Task 5: Add LLM-Backed Layers 4-5 Later
 

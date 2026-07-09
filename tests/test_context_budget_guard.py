@@ -28,12 +28,14 @@ def _request(
     system_prompt: str = "Base prompt.",
     tools: list | None = None,
     context: Context | None = None,
+    state: dict | None = None,
 ) -> ModelRequest:
     return ModelRequest(
         model=_model(),
         messages=messages,
         system_prompt=system_prompt,
         tools=tools or [],
+        state=state,
         runtime=SimpleNamespace(
             context=context
             or Context(
@@ -91,6 +93,27 @@ def test_context_budget_guard_passes_through_small_requests():
         return ModelResponse(result=[AIMessage(content="ok")])
 
     request = _request(messages=[HumanMessage(content="查询北京到上海")])
+    response = guard.wrap_model_call(request, handler)
+
+    assert response.result[0].content == "ok"
+    assert seen_requests == [request]
+
+
+def test_context_budget_guard_does_not_inject_todo_snapshot_under_budget():
+    guard = ContextBudgetGuard(context_window_tokens=8192, max_fraction=0.85)
+    seen_requests: list[ModelRequest] = []
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        seen_requests.append(request)
+        return ModelResponse(result=[AIMessage(content="ok")])
+
+    request = _request(
+        messages=[HumanMessage(content="查询北京到上海")],
+        state={
+            "messages": [],
+            "todos": [{"content": "查询报价", "status": "in_progress"}],
+        },
+    )
     response = guard.wrap_model_call(request, handler)
 
     assert response.result[0].content == "ok"
@@ -290,6 +313,79 @@ def test_context_budget_guard_compacts_large_react_context_and_preserves_tools()
     assert compact_request.system_prompt == request.system_prompt
 
 
+def test_context_budget_guard_injects_todo_snapshot_only_after_compaction():
+    guard = ContextBudgetGuard(context_window_tokens=10, max_fraction=0.10)
+    seen_requests: list[ModelRequest] = []
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        seen_requests.append(request)
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    request = _request(
+        messages=[
+            HumanMessage(content="批量查询未来多天票价并汇总"),
+            ToolMessage(
+                content=_quote_payload("2026-07-08", 400, 430),
+                name="search_airfare_quotes",
+                tool_call_id="call-1",
+            ),
+        ],
+        system_prompt="system" * 100,
+        tools=[{"name": "search_airfare_quotes", "description": "tool" * 50}],
+        state={
+            "messages": [],
+            "todos": [
+                {
+                    "content": "查询前五天报价",
+                    "status": "completed",
+                    "raw_tool_result": "do not expose",
+                },
+                {"content": "汇总价格区间", "status": "in_progress"},
+            ],
+        },
+    )
+
+    guard.wrap_model_call(request, handler)
+
+    compact_request = seen_requests[0]
+    _, tool_message = _ledger_messages(compact_request.messages)
+    compact_prompt = tool_message.content
+    assert "todo_snapshot" in compact_prompt
+    assert "protected task state" in compact_prompt
+    assert "查询前五天报价" in compact_prompt
+    assert "completed" in compact_prompt
+    assert "汇总价格区间" in compact_prompt
+    assert "in_progress" in compact_prompt
+    assert "raw_tool_result" not in compact_prompt
+
+
+def test_context_budget_guard_compacts_without_todos_when_state_is_missing():
+    guard = ContextBudgetGuard(context_window_tokens=10, max_fraction=0.10)
+    seen_requests: list[ModelRequest] = []
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        seen_requests.append(request)
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    request = _request(
+        messages=[
+            HumanMessage(content="查询未来多天票价"),
+            ToolMessage(
+                content=_quote_payload("2026-07-08", 400, 430),
+                name="search_airfare_quotes",
+                tool_call_id="call-1",
+            ),
+        ],
+        system_prompt="system" * 100,
+        tools=[{"name": "search_airfare_quotes", "description": "tool" * 50}],
+    )
+
+    guard.wrap_model_call(request, handler)
+
+    _, tool_message = _ledger_messages(seen_requests[0].messages)
+    assert "todo_snapshot" not in tool_message.content
+
+
 def test_context_budget_guard_logs_bounded_compacted_state_preview():
     guard = ContextBudgetGuard(context_window_tokens=10, max_fraction=0.10)
 
@@ -339,6 +435,7 @@ def test_context_budget_guard_logs_bounded_compacted_state_preview():
     assert fields["compacted_state_preview_chars"] <= 4003
     assert fields["compacted_state_chars"] >= fields["compacted_state_preview_chars"]
     assert fields["compacted_state_sha256"]
+    assert fields["todo_snapshot_item_count"] == 0
 
 
 def test_context_budget_guard_compacts_web_41e6d813_like_request():
