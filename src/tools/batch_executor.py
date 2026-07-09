@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 from langchain.tools import tool
 from pydantic import Field
 
-from src.guardrails.tool_observation import json_shape_summary, json_stats_summary
+from src.summarization.tool_observation import json_shape_summary, json_stats_summary
 from src.tools.registry import get_tools, register_tool
 
 BATCH_TOOL_NAME = "run_tool_batch"

@@ -7,22 +7,15 @@ from hashlib import sha256
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.observability import log_event
 from src.observability.model_trace import model_request_trace_chars
-from src.prompt import (
-    CONTEXT_LEDGER_TOOL_NAME,
-    build_context_ledger_tool_call_args,
-    build_context_ledger_tool_observation,
-)
-from src.guardrails.layered_context import (
-    CompactLayeredContextState,
-    build_layered_context_state,
-    has_compressible_history,
-    partition_messages_for_compaction,
-)
 from src.runtime import Context
+from src.summarization.context_compaction import (
+    ContextCompactionResult,
+    build_context_compaction_request,
+)
+from src.summarization.layered_context import has_compressible_history
 
 
 DEFAULT_MAX_FRACTION = 0.85
@@ -78,44 +71,38 @@ class ContextBudgetGuard(AgentMiddleware):
         threshold = self.context_window_tokens * self.chars_per_token * self.max_fraction
         if estimate <= threshold or not has_compressible_history(request.messages):
             return request
-        compressed_messages, raw_messages = partition_messages_for_compaction(
-            request.messages,
-            raw_recent_turns=self.raw_recent_turns,
-        )
-        if not compressed_messages:
-            return request
-        layered_state = build_layered_context_state(
-            compressed_messages,
-            budget_chars=max(
-                round(threshold * self.ledger_fraction),
-                self.min_ledger_budget_chars,
-            ),
-            preserve_latest_user_message=False,
-        )
-
-        latest_human_text = _current_user_goal(request)
-        ledger_messages = _synthetic_ledger_messages(
-            latest_human_text=latest_human_text,
-            ledger=layered_state,
-            estimate_chars=estimate,
-            threshold_chars=round(threshold),
-        )
-        recent_messages = _recent_messages_with_current_goal(
-            raw_messages,
-            current_user_goal=latest_human_text,
-        )
-        compact_request = request.override(
-            messages=[*recent_messages, *ledger_messages],
-        )
-        _log_context_budget_compacted(
+        return self._compaction_pipeline_request(
             request,
             estimate_chars=estimate,
             threshold_chars=round(threshold),
-            ledger=layered_state,
-            compacted_message_count=len(compact_request.messages),
-            raw_message_count=len(recent_messages),
         )
-        return compact_request
+
+    def _compaction_pipeline_request(
+        self,
+        request: ModelRequest,
+        *,
+        estimate_chars: int,
+        threshold_chars: int,
+    ) -> ModelRequest:
+        """Build a transient compacted model request after budget pressure triggers."""
+        compaction_result = build_context_compaction_request(
+            request,
+            latest_human_text=_current_user_goal(request),
+            estimate_chars=estimate_chars,
+            threshold_chars=threshold_chars,
+            ledger_fraction=self.ledger_fraction,
+            min_ledger_budget_chars=self.min_ledger_budget_chars,
+            raw_recent_turns=self.raw_recent_turns,
+        )
+        if compaction_result is None:
+            return request
+        _log_context_budget_compacted(
+            request,
+            estimate_chars=estimate_chars,
+            threshold_chars=threshold_chars,
+            compaction_result=compaction_result,
+        )
+        return compaction_result.request
 
 
 def build_context_budget_guard(
@@ -149,75 +136,10 @@ def _current_user_goal(request: ModelRequest) -> str:
     return _latest_human_text(request.messages)
 
 
-def _has_human_message(messages: list[Any]) -> bool:
-    return any(str(getattr(message, "type", "")) == "human" for message in messages)
-
-
-def _recent_messages_with_current_goal(
-    raw_messages: list[Any],
-    *,
-    current_user_goal: str,
-) -> list[Any]:
-    if not current_user_goal:
-        return raw_messages
-    if any(
-        str(getattr(message, "type", "")) == "human"
-        and str(getattr(message, "content", "")) == current_user_goal
-        for message in raw_messages
-    ):
-        return raw_messages
-    if len(raw_messages) == 1 and str(getattr(raw_messages[0], "type", "")) == "human":
-        return [HumanMessage(content=current_user_goal)]
-    return [*raw_messages, HumanMessage(content=current_user_goal)]
-
-
 def _preview_text(text: str, limit: int) -> str:
     if limit <= 0:
         return ""
     return text if len(text) <= limit else f"{text[:limit]}..."
-
-
-def _synthetic_ledger_messages(
-    *,
-    latest_human_text: str,
-    ledger: CompactLayeredContextState,
-    estimate_chars: int,
-    threshold_chars: int,
-) -> list[Any]:
-    """Represent compacted historical state as a protocol-valid tool observation."""
-    tool_call_id = _synthetic_ledger_tool_call_id(ledger)
-    tool_args = build_context_ledger_tool_call_args(
-        original_user_message=latest_human_text,
-        estimate_chars=estimate_chars,
-        threshold_chars=threshold_chars,
-    )
-    return [
-        AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "id": tool_call_id,
-                    "name": CONTEXT_LEDGER_TOOL_NAME,
-                    "args": tool_args,
-                }
-            ],
-        ),
-        ToolMessage(
-            content=build_context_ledger_tool_observation(
-                original_user_message=latest_human_text,
-                ledger=ledger,
-                estimate_chars=estimate_chars,
-                threshold_chars=threshold_chars,
-            ),
-            name=CONTEXT_LEDGER_TOOL_NAME,
-            tool_call_id=tool_call_id,
-        ),
-    ]
-
-
-def _synthetic_ledger_tool_call_id(ledger: CompactLayeredContextState) -> str:
-    digest = sha256(ledger.to_prompt_text().encode("utf-8")).hexdigest()[:16]
-    return f"context_ledger_{digest}"
 
 
 def _log_context_budget_compacted(
@@ -225,10 +147,10 @@ def _log_context_budget_compacted(
     *,
     estimate_chars: int,
     threshold_chars: int,
-    ledger: CompactLayeredContextState,
-    compacted_message_count: int,
-    raw_message_count: int,
+    compaction_result: ContextCompactionResult,
 ) -> None:
+    ledger = compaction_result.ledger
+    projection = compaction_result.layer_one_projection
     compacted_state_text = ledger.to_prompt_text()
     compacted_state_preview = _preview_text(
         compacted_state_text,
@@ -253,10 +175,16 @@ def _log_context_budget_compacted(
         dropped_assistant_message_count=ledger.dropped_assistant_message_count,
         compacted_request_chars=len(compacted_state_text),
         original_message_count=len(request.messages),
-        compacted_message_count=compacted_message_count,
-        raw_message_count=raw_message_count,
+        compacted_message_count=len(compaction_result.request.messages),
+        raw_message_count=compaction_result.raw_message_count,
         original_tool_count=len(request.tools),
         compacted_tool_count=len(request.tools),
+        layer1_reasoning_block_removed_count=projection.reasoning_block_removed_count,
+        layer1_tool_message_removed_count=projection.tool_message_removed_count,
+        layer1_tool_call_removed_count=projection.tool_call_removed_count,
+        layer1_adjacent_human_merged_count=projection.adjacent_human_merged_count,
+        layer1_duplicate_tool_output_count=projection.duplicate_tool_output_count,
+        layer1_empty_tool_output_count=projection.empty_tool_output_count,
         compaction_mode=ledger.strategy,
         compacted_state_preview=compacted_state_preview,
         compacted_state_preview_chars=len(compacted_state_preview),

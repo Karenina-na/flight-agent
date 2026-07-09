@@ -149,6 +149,9 @@ def has_reasoning_block(message_chunk: object) -> bool:
 
 def reasoning_from_mapping(mapping: dict) -> list[str]:
     """Extract reasoning strings from a content block mapping."""
+    if mapping.get("type") in {"reasoning_text", "summary_text"}:
+        text = mapping.get("text")
+        return [str(text)] if text else []
     if mapping.get("type") != "reasoning":
         return []
 

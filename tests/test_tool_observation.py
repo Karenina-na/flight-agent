@@ -1,6 +1,6 @@
 from langchain.messages import AIMessage, ToolMessage
 
-from src.guardrails.tool_observation import (
+from src.summarization.tool_observation import (
     build_tool_observations,
     compact_tool_observations,
     json_shape_summary,

@@ -1,6 +1,6 @@
 from langchain.messages import AIMessage, HumanMessage, ToolMessage
 
-from src.guardrails.layered_context import (
+from src.summarization.layered_context import (
     build_layered_context_state,
     has_compressible_history,
     partition_messages_for_compaction,

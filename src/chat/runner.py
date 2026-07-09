@@ -167,6 +167,11 @@ def _run_agent_turn_with_trace(
                 malformed_tool_call_text_seen = _has_malformed_tool_call_text(
                     assistant_message
                 )
+                current_calls = merge_trace_events_into_turns(
+                    [turn_trace],
+                    trace_events,
+                )[0].get("calls", [])
+                tool_fallback = fallback_answer_from_tool_results(current_calls)
                 turn_trace["empty_visible_output"] = True
                 turn_trace["malformed_tool_call_text_seen"] = (
                     malformed_tool_call_text_seen
@@ -182,8 +187,15 @@ def _run_agent_turn_with_trace(
                         "The final assistant message contained tool-call-like "
                         "text outside the structured tool_calls protocol."
                     )
-                assistant_parts.append(EMPTY_VISIBLE_OUTPUT_FALLBACK)
-                turn_trace["assistant_chunks"].append(EMPTY_VISIBLE_OUTPUT_FALLBACK)
+                visible_fallback = tool_fallback or EMPTY_VISIBLE_OUTPUT_FALLBACK
+                if tool_fallback:
+                    turn_trace["limitations"].append(
+                        "A deterministic fallback answer was generated from "
+                        "successful current-turn tool results."
+                    )
+                    turn_trace["tool_result_fallback_used"] = True
+                assistant_parts.append(visible_fallback)
+                turn_trace["assistant_chunks"].append(visible_fallback)
                 assistant_chunk_count = 1
                 answer_started = True
         else:
@@ -261,6 +273,84 @@ def _has_malformed_tool_call_text(message: object) -> bool:
     raw_text = str(json_safe(getattr(message, "content", "")))
     markers = ("<function=", "</function>", "<tool_call", "</tool_call>")
     return any(marker in raw_text for marker in markers)
+
+
+def fallback_answer_from_tool_results(calls: list[dict[str, Any]]) -> str | None:
+    """Build a deterministic answer from successful current-turn tool results."""
+    for call in reversed(calls):
+        if call.get("type") != "tool" or call.get("event") != "tool_call_end":
+            continue
+        if call.get("tool_name") == "search_airfare_quotes":
+            answer = _airfare_quotes_fallback(call)
+            if answer:
+                return answer
+    return None
+
+
+def _airfare_quotes_fallback(call: dict[str, Any]) -> str | None:
+    response = call.get("response") or {}
+    raw_content = response.get("content")
+    if not isinstance(raw_content, str):
+        return None
+    try:
+        payload = json.loads(raw_content)
+    except json.JSONDecodeError:
+        return None
+
+    query = payload.get("query") or {}
+    quotes = payload.get("quotes") or []
+    sources = payload.get("sources_used") or []
+    limitations = payload.get("limitations") or []
+    origin = _string_or_joined(query.get("origin")) or "出发地"
+    destination = _string_or_joined(query.get("destination")) or "目的地"
+    departure_date = str(query.get("departure_date") or "未知日期")
+    captured_at = str(payload.get("captured_at") or "未知")
+
+    lines = [
+        "模型最终回答生成失败，我先根据已经成功返回的工具结果给你一个兜底摘要：",
+        "",
+        f"**查询条件：** {origin} → {destination}，出发日期 {departure_date}",
+        f"**查询时间：** {captured_at}",
+        f"**数据来源：** {', '.join(str(source) for source in sources) if sources else '未返回来源'}",
+        "",
+    ]
+    if quotes:
+        lines.append("**报价样本：**")
+        for quote in quotes[:10]:
+            if not isinstance(quote, dict):
+                continue
+            flight = str(quote.get("flight_number") or "未知航班")
+            airline = str(quote.get("airline") or "未知航司")
+            price = quote.get("price")
+            currency = str(quote.get("currency") or "")
+            origin_iata = str(quote.get("origin_iata") or "")
+            destination_iata = str(quote.get("destination_iata") or "")
+            route = (
+                f"{origin_iata}->{destination_iata}"
+                if origin_iata or destination_iata
+                else "未知航线"
+            )
+            departure = str(quote.get("scheduled_departure") or "未知起飞时间")
+            lines.append(
+                f"- {flight}（{airline}）：{price} {currency}，{route}，起飞 {departure}"
+            )
+    else:
+        lines.append("**报价样本：** 当前工具结果未返回可见报价。")
+
+    if limitations:
+        lines.extend(["", "**限制：**"])
+        lines.extend(f"- {item}" for item in limitations)
+    return "\n".join(lines)
+
+
+def _string_or_joined(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "/".join(str(item) for item in value)
+    if value is None:
+        return ""
+    return str(value)
 
 
 def _finish_error_turn(
@@ -1083,6 +1173,7 @@ __all__ = [
     "conversation_trace_payload",
     "debug_summary_payload",
     "execution_step_summaries",
+    "fallback_answer_from_tool_results",
     "run_agent_turn",
     "tool_call_summaries",
 ]

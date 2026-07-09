@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
 
-from src.guardrails.tool_observation import (
+from src.summarization.tool_observation import (
     CompactObservationLedger,
     build_tool_observations,
     compact_tool_observations,

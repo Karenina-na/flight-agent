@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from src.chat.runner import (
     debug_summary_payload,
     execution_step_summaries,
+    fallback_answer_from_tool_results,
     run_agent_turn,
     tool_call_summaries,
 )
@@ -57,6 +58,26 @@ def test_reasoning_text_reads_summary_blocks():
     assert reasoning_text(chunk) == "归纳步骤。"
     assert has_reasoning_block(chunk)
     assert message_text(chunk) == "demo 可以验证非流式输出。"
+
+
+def test_reasoning_text_reads_nested_reasoning_text_blocks():
+    chunk = AIMessageChunk(
+        content=[
+            {
+                "type": "reasoning",
+                "content": [
+                    {
+                        "type": "reasoning_text",
+                        "text": "模型写在 reasoning.content 里的文本。",
+                    }
+                ],
+            }
+        ],
+        response_metadata={"model_provider": "openai"},
+    )
+
+    assert reasoning_text(chunk) == "模型写在 reasoning.content 里的文本。"
+    assert has_reasoning_block(chunk)
 
 
 def test_reasoning_block_can_exist_without_exposed_text():
@@ -155,6 +176,41 @@ def test_tool_call_summaries_collapse_start_and_end_events():
             "response": {"content": '{"quotes":[]}'},
         },
     ]
+
+
+def test_empty_final_output_uses_latest_successful_airfare_tool_result():
+    calls = [
+        {
+            "index": 8,
+            "type": "tool",
+            "event": "tool_call_end",
+            "tool_name": "search_airfare_quotes",
+            "tool_call_id": "call-2",
+            "status": "success",
+            "response": {
+                "content": (
+                    '{"query":{"origin":"广州","destination":"香港",'
+                    '"departure_date":"2026-07-09"},'
+                    '"captured_at":"2026-07-08T14:06:44+08:00",'
+                    '"sources_used":["fliggy_mcp"],'
+                    '"quotes":[{"flight_number":"CX989","airline":"国泰航空",'
+                    '"origin_iata":"CAN","destination_iata":"HKG",'
+                    '"scheduled_departure":"2026-07-09T22:20",'
+                    '"price":1085.0,"currency":"CNY"}],'
+                    '"limitations":["Prices are point-in-time quotes."]}'
+                )
+            },
+        }
+    ]
+
+    answer = fallback_answer_from_tool_results(calls)
+
+    assert answer is not None
+    assert "广州 → 香港" in answer
+    assert "2026-07-09" in answer
+    assert "fliggy_mcp" in answer
+    assert "CX989" in answer
+    assert "1085" in answer
 
 
 def test_execution_step_summaries_group_react_steps_without_full_session_trace():
