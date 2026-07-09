@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from langchain.messages import HumanMessage, ToolMessage
 
 from src.summarization.context_compaction import (
+    DEFAULT_TODO_SNAPSHOT_MAX_CONTENT_CHARS,
+    DEFAULT_TODO_SNAPSHOT_MAX_ITEMS,
     build_todo_snapshot_from_request,
     project_layer_one_messages,
 )
@@ -104,3 +106,25 @@ def test_build_todo_snapshot_returns_none_for_missing_or_invalid_state():
     assert build_todo_snapshot_from_request(
         SimpleNamespace(state={"todos": [{"content": "", "status": "pending"}]})
     ) is None
+
+
+def test_build_todo_snapshot_bounds_items_and_content_length():
+    long_content = "任务内容" * 200
+    request = SimpleNamespace(
+        state={
+            "todos": [
+                {"content": f"{long_content}-{index}", "status": "pending"}
+                for index in range(DEFAULT_TODO_SNAPSHOT_MAX_ITEMS + 3)
+            ]
+        }
+    )
+
+    snapshot = build_todo_snapshot_from_request(request)
+
+    assert snapshot is not None
+    assert len(snapshot["items"]) == DEFAULT_TODO_SNAPSHOT_MAX_ITEMS
+    assert snapshot["total_count"] == DEFAULT_TODO_SNAPSHOT_MAX_ITEMS + 3
+    assert snapshot["dropped_count"] == 3
+    assert snapshot["truncated_count"] == DEFAULT_TODO_SNAPSHOT_MAX_ITEMS
+    assert len(snapshot["items"][0]["content"]) <= DEFAULT_TODO_SNAPSHOT_MAX_CONTENT_CHARS + 3
+    assert snapshot["items"][0]["content"].endswith("...")

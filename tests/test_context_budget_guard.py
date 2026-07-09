@@ -429,13 +429,54 @@ def test_context_budget_guard_logs_bounded_compacted_state_preview():
     ]
     assert len(compact_events) == 1
     fields = compact_events[0]["fields"]
-    assert fields["compacted_state_preview"].startswith("{")
+    assert fields["compacted_state_preview"].startswith("## 压缩后的历史工作状态")
     assert "tool_observation_ledger" in fields["compacted_state_preview"]
     assert "2026-07-08" in fields["compacted_state_preview"]
     assert fields["compacted_state_preview_chars"] <= 4003
     assert fields["compacted_state_chars"] >= fields["compacted_state_preview_chars"]
     assert fields["compacted_state_sha256"]
     assert fields["todo_snapshot_item_count"] == 0
+
+
+def test_context_budget_guard_logs_full_synthetic_observation_preview_with_todo():
+    guard = ContextBudgetGuard(context_window_tokens=10, max_fraction=0.10)
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    request = _request(
+        messages=[
+            HumanMessage(content="批量查询未来多天票价并汇总"),
+            ToolMessage(
+                content=_quote_payload("2026-07-08", 400, 430),
+                name="search_airfare_quotes",
+                tool_call_id="call-1",
+            ),
+        ],
+        system_prompt="system" * 100,
+        tools=[{"name": "search_airfare_quotes", "description": "tool" * 50}],
+        state={
+            "messages": [],
+            "todos": [{"content": "汇总价格区间", "status": "in_progress"}],
+        },
+    )
+
+    with collect_trace_events(trace_id="thread-1") as events:
+        guard.wrap_model_call(request, handler)
+
+    compact_events = [
+        event
+        for event in events
+        if event["event"] == "react_context_budget_compacted"
+    ]
+    assert len(compact_events) == 1
+    fields = compact_events[0]["fields"]
+    assert fields["compacted_state_preview"].startswith("## 压缩后的历史工作状态")
+    assert "todo_snapshot" in fields["compacted_state_preview"]
+    assert "汇总价格区间" in fields["compacted_state_preview"]
+    assert fields["todo_snapshot_item_count"] == 1
+    assert fields["todo_snapshot_dropped_count"] == 0
+    assert fields["todo_snapshot_truncated_count"] == 0
 
 
 def test_context_budget_guard_compacts_web_41e6d813_like_request():

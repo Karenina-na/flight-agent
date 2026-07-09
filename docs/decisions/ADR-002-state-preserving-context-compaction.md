@@ -277,9 +277,18 @@ final-answer fallback. It records:
 - `compacted_message_count`
 - `original_tool_count`
 - `compacted_tool_count`
+- `todo_snapshot_item_count`
+- `todo_snapshot_total_count`
+- `todo_snapshot_dropped_count`
+- `todo_snapshot_truncated_count`
 - `compacted_state_preview`
 - `compacted_state_sha256`
 - `compacted_prompt_sha256`
+
+`compacted_state_preview` is generated from the full synthetic context ledger
+observation shown to the model, not only from the raw observation ledger JSON.
+When todo protected state is present, the preview can therefore show the
+`todo_snapshot` section as well as the layered historical state.
 
 The UI execution summary displays this as "上下文状态压缩" and explains that the
 agent can continue calling tools after compression.

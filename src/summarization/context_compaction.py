@@ -22,6 +22,10 @@ from src.prompt import (
 )
 
 
+DEFAULT_TODO_SNAPSHOT_MAX_ITEMS = 20
+DEFAULT_TODO_SNAPSHOT_MAX_CONTENT_CHARS = 300
+
+
 @dataclass(frozen=True)
 class LayerOneProjection:
     """Projected compressed-prefix messages plus deterministic trim counters."""
@@ -99,7 +103,12 @@ def build_context_compaction_request(
     )
 
 
-def build_todo_snapshot_from_request(request: ModelRequest) -> dict[str, Any] | None:
+def build_todo_snapshot_from_request(
+    request: ModelRequest,
+    *,
+    max_items: int = DEFAULT_TODO_SNAPSHOT_MAX_ITEMS,
+    max_content_chars: int = DEFAULT_TODO_SNAPSHOT_MAX_CONTENT_CHARS,
+) -> dict[str, Any] | None:
     """Extract compact protected todo state from a model request, if available."""
     state = getattr(request, "state", None)
     if not isinstance(state, dict):
@@ -109,33 +118,55 @@ def build_todo_snapshot_from_request(request: ModelRequest) -> dict[str, Any] | 
         return None
 
     items: list[dict[str, str | int]] = []
+    truncated_count = 0
     for index, todo in enumerate(todos):
+        if len(items) >= max_items:
+            break
         if not isinstance(todo, dict):
             continue
         content = todo.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
+        compact_content, was_truncated = _truncate_todo_content(
+            content.strip(),
+            max_content_chars=max_content_chars,
+        )
+        if was_truncated:
+            truncated_count += 1
         status = todo.get("status")
         if not isinstance(status, str) or not status.strip():
             status = "unknown"
         items.append(
             {
                 "index": index,
-                "content": content.strip(),
+                "content": compact_content,
                 "status": status.strip(),
             }
         )
 
     if not items:
         return None
+    total_count = len(todos)
     return {
         "type": "todo_snapshot",
+        "total_count": total_count,
+        "preserved_count": len(items),
+        "dropped_count": max(total_count - len(items), 0),
+        "truncated_count": truncated_count,
         "items": items,
         "instruction": (
             "Continue from pending/in_progress items. If task state changes, "
             "update todos with the todo tool."
         ),
     }
+
+
+def _truncate_todo_content(content: str, *, max_content_chars: int) -> tuple[str, bool]:
+    if max_content_chars <= 0:
+        return "", bool(content)
+    if len(content) <= max_content_chars:
+        return content, False
+    return f"{content[:max_content_chars]}...", True
 
 
 def recent_messages_with_current_goal(

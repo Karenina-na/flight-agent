@@ -10,6 +10,7 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 
 from src.observability import log_event
 from src.observability.model_trace import model_request_trace_chars
+from src.prompt import build_context_ledger_tool_observation
 from src.runtime import Context
 from src.summarization.context_compaction import (
     ContextCompactionResult,
@@ -151,7 +152,13 @@ def _log_context_budget_compacted(
 ) -> None:
     ledger = compaction_result.ledger
     projection = compaction_result.layer_one_projection
-    compacted_state_text = ledger.to_prompt_text()
+    compacted_state_text = build_context_ledger_tool_observation(
+        original_user_message=_current_user_goal(request),
+        ledger=ledger,
+        estimate_chars=estimate_chars,
+        threshold_chars=threshold_chars,
+        todo_snapshot=compaction_result.todo_snapshot,
+    )
     compacted_state_preview = _preview_text(
         compacted_state_text,
         DEFAULT_COMPACTED_STATE_PREVIEW_CHARS,
@@ -179,6 +186,13 @@ def _log_context_budget_compacted(
         raw_message_count=compaction_result.raw_message_count,
         todo_snapshot_item_count=len(
             (compaction_result.todo_snapshot or {}).get("items", [])
+        ),
+        todo_snapshot_total_count=(compaction_result.todo_snapshot or {}).get("total_count", 0),
+        todo_snapshot_dropped_count=(compaction_result.todo_snapshot or {}).get(
+            "dropped_count", 0
+        ),
+        todo_snapshot_truncated_count=(compaction_result.todo_snapshot or {}).get(
+            "truncated_count", 0
         ),
         original_tool_count=len(request.tools),
         compacted_tool_count=len(request.tools),

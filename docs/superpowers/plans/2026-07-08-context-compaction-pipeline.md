@@ -143,6 +143,7 @@ Current implementation:
 - `ContextBudgetGuard` only reads todo state after context-budget compaction is triggered.
 - Todo state is read by duck-typing `ModelRequest.state["todos"]`; if the state is missing or malformed, compaction continues without todo injection.
 - The compact snapshot keeps only `index`, `content`, and `status`; raw todo tool calls, reasoning, extra metadata, and historical messages are not copied into the compacted context.
+- The compact snapshot is bounded: it preserves at most 20 todo items, truncates each content field to 300 chars, and records `total_count`, `preserved_count`, `dropped_count`, and `truncated_count`.
 - The snapshot is rendered inside the synthetic context ledger tool observation before the compressed historical state, so it acts as protected task state rather than ordinary chat/tool history.
 - Under-budget requests remain unchanged and do not receive any todo snapshot.
 
@@ -251,6 +252,9 @@ assert seen_requests[0] is request
 - [x] Skip malformed todo state and empty todo items without raising.
 - [x] Render the todo snapshot as protected task state inside the synthetic context ledger observation.
 - [x] Add trace metadata for `todo_snapshot_item_count`.
+- [x] Add trace metadata for `todo_snapshot_total_count`, `todo_snapshot_dropped_count`, and `todo_snapshot_truncated_count`.
+- [x] Record `compacted_state_preview` from the full synthetic context ledger observation, including protected todo state when present.
+- [x] Bound todo snapshot size to avoid re-inflating compacted context.
 - [x] Do not make the model call todo tools during compression.
 
 ### Task 5: Add LLM-Backed Layers 4-5 Later
