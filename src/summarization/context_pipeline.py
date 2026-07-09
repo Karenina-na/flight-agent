@@ -171,12 +171,14 @@ def _with_semantic_summaries(
     compaction_level: CompactionLevel,
     semantic_summary_count: int,
 ) -> ContextCompactionResult:
+    include_deterministic_ledger = compaction_level != "l5_global_fallback"
     compact_request = result.request.override(
         messages=[
             *result.raw_messages,
             *result.synthetic_message_builder(
                 local_semantic_summaries=local_semantic_summaries,
                 global_fallback_summary=global_fallback_summary,
+                include_deterministic_ledger=include_deterministic_ledger,
             ),
         ]
     )
@@ -188,6 +190,7 @@ def _with_semantic_summaries(
         global_fallback_summary=global_fallback_summary,
         semantic_summary_count=semantic_summary_count,
         global_fallback_used=global_fallback_summary is not None,
+        deterministic_ledger_included=include_deterministic_ledger,
     )
 
 

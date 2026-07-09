@@ -157,6 +157,46 @@ def test_pipeline_uses_l5_global_fallback_when_l4_still_over_budget():
     assert len(summary_model.calls) == 2
     assert "global_fallback_summary" in _ledger_content(result.request.messages)
     assert "全局事实" in _ledger_content(result.request.messages)
+    assert "deterministic_history_omitted" in _ledger_content(result.request.messages)
+
+
+def test_l5_global_fallback_omits_deterministic_ledger_details():
+    summary_model = FakeSummaryModel(
+        [
+            '{"facts":["局部事实"],"open_items":[],"evidence_refs":["message:0"]}',
+            '{"facts":["只保留全局事实"],"open_items":[],"evidence_refs":["summary:local"],"dropped_detail_notice":"明细已降级"}',
+        ]
+    )
+    request = _request(
+        messages=[
+            HumanMessage(content="查询第一批"),
+            _tool_message('{"records":[{"secret_detail":"不能进入L5最终上下文"}]}', "call-1"),
+            HumanMessage(content="现在汇总"),
+        ]
+    )
+    estimates = iter([3000, 2800, 1000])
+
+    result = build_context_pipeline_request(
+        request,
+        latest_human_text="现在汇总",
+        estimate_chars=5000,
+        threshold_chars=2000,
+        ledger_fraction=0.25,
+        min_ledger_budget_chars=12000,
+        raw_recent_turns=1,
+        estimate_request_chars=lambda request: next(estimates),
+        semantic_enabled=True,
+        summary_model=summary_model,
+    )
+
+    assert result is not None
+    assert result.compaction_level == "l5_global_fallback"
+    content = _ledger_content(result.request.messages)
+    assert "global_fallback_summary" in content
+    assert "只保留全局事实" in content
+    assert "deterministic_history_omitted" in content
+    assert "secret_detail" not in content
+    assert "call-1" not in content
 
 
 def test_pipeline_falls_back_to_l1_l3_when_summary_model_fails():

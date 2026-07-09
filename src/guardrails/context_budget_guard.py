@@ -167,6 +167,7 @@ def _log_context_budget_compacted(
         todo_snapshot=compaction_result.todo_snapshot,
         local_semantic_summaries=compaction_result.local_semantic_summaries or [],
         global_fallback_summary=compaction_result.global_fallback_summary,
+        include_deterministic_ledger=compaction_result.deterministic_ledger_included,
     )
     compacted_state_preview = _preview_text(
         compacted_state_text,
@@ -216,6 +217,7 @@ def _log_context_budget_compacted(
         semantic_summary_count=compaction_result.semantic_summary_count,
         semantic_summary_failed=compaction_result.semantic_summary_failed,
         global_fallback_used=compaction_result.global_fallback_used,
+        deterministic_ledger_included=compaction_result.deterministic_ledger_included,
         post_compaction_chars=compaction_result.post_compaction_chars,
         still_over_budget=compaction_result.still_over_budget,
         compacted_state_preview=compacted_state_preview,

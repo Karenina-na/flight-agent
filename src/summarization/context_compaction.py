@@ -56,6 +56,7 @@ class ContextCompactionResult:
     semantic_summary_count: int = 0
     semantic_summary_failed: bool = False
     global_fallback_used: bool = False
+    deterministic_ledger_included: bool = True
     post_compaction_chars: int = 0
     still_over_budget: bool = False
 
@@ -113,7 +114,8 @@ def build_context_compaction_request(
         raw_messages=recent_messages,
         synthetic_message_builder=lambda *,
         local_semantic_summaries=None,
-        global_fallback_summary=None: synthetic_ledger_messages(
+        global_fallback_summary=None,
+        include_deterministic_ledger=True: synthetic_ledger_messages(
             latest_human_text=latest_human_text,
             ledger=layered_state,
             estimate_chars=estimate_chars,
@@ -121,6 +123,7 @@ def build_context_compaction_request(
             todo_snapshot=todo_snapshot,
             local_semantic_summaries=local_semantic_summaries or [],
             global_fallback_summary=global_fallback_summary,
+            include_deterministic_ledger=include_deterministic_ledger,
         ),
     )
 
@@ -376,6 +379,7 @@ def synthetic_ledger_messages(
     todo_snapshot: dict[str, Any] | None = None,
     local_semantic_summaries: list[dict[str, Any]] | None = None,
     global_fallback_summary: dict[str, Any] | None = None,
+    include_deterministic_ledger: bool = True,
 ) -> list[Any]:
     """Represent compacted historical state as a protocol-valid tool observation."""
     tool_call_id = synthetic_ledger_tool_call_id(ledger)
@@ -404,6 +408,7 @@ def synthetic_ledger_messages(
                 todo_snapshot=todo_snapshot,
                 local_semantic_summaries=local_semantic_summaries or [],
                 global_fallback_summary=global_fallback_summary,
+                include_deterministic_ledger=include_deterministic_ledger,
             ),
             name=CONTEXT_LEDGER_TOOL_NAME,
             tool_call_id=tool_call_id,

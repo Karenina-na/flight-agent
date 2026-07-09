@@ -141,6 +141,14 @@ summary input receives only a count-level todo reference, while the final
 context ledger still receives the bounded todo snapshot so status and ordering
 survive.
 
+L5 is the strict fallback. When it activates, the synthetic context ledger pair
+is still protocol-valid, but the deterministic history ledger body is no longer
+rendered into the model request. Instead, the observation contains a
+`deterministic_history_omitted` notice with aggregate counts and the
+`global_fallback_summary`. The model may continue using recent raw messages,
+the latest user goal, protected todo state, and the global fact list, but it
+must not claim access to omitted tool-observation details.
+
 ### Layered Context State
 The compressed prefix is represented as a generic layered context state with
 three layers:
@@ -316,6 +324,7 @@ final-answer fallback. It records:
 - `semantic_summary_count`
 - `semantic_summary_failed`
 - `global_fallback_used`
+- `deterministic_ledger_included`
 - `post_compaction_chars`
 - `still_over_budget`
 - `compacted_state_preview`
@@ -405,9 +414,10 @@ added later inside specific tools or providers if needed.
 
 ## Known Limitations
 
-- L4/L5 semantic compaction now provides a second-level fallback path, but it
-  still uses character-based estimates and can report `still_over_budget=true`
-  if even the global fallback view remains too large.
+- L5 semantic compaction now omits deterministic ledger details as a strict
+  fallback, but it still uses character-based estimates and can report
+  `still_over_budget=true` if even the anchor-only global fallback view remains
+  too large.
 - The ledger uses character-based budgeting, not tokenizer-level accounting.
 - The recent-turn retention rule currently keeps a fixed number of recent user
   turns raw. A future version may adapt this count based on remaining budget.

@@ -278,9 +278,9 @@ Current implementation:
 - `build_context_pipeline_request()` first builds the deterministic L1-L3 compacted request through `build_context_compaction_request()`.
 - If the compacted request is already within budget, no summary model is called and `compaction_level="l1_l3"`.
 - If semantic compression is enabled and a summary model is available, L4 generates a local semantic summary from a bounded assembly containing protected todo metadata, deterministic history ledger, and existing semantic summaries.
-- If L4 is still oversized, L5 replaces local semantic detail with a global fallback summary while preserving raw recent messages, the latest user goal, protected todo snapshot, and the protocol-valid synthetic context ledger pair.
+- If L4 is still oversized, L5 switches to strict global fallback mode: raw recent messages, the latest user goal, protected todo snapshot, and the protocol-valid synthetic context ledger pair are preserved, but deterministic history ledger details are omitted from the ledger body and replaced by a `deterministic_history_omitted` notice plus the global fallback summary.
 - `settings.summarization.enabled=false` disables L4/L5 and keeps the pipeline deterministic.
-- Trace metadata includes `compaction_level`, `semantic_summary_count`, `semantic_summary_failed`, `global_fallback_used`, `post_compaction_chars`, and `still_over_budget`.
+- Trace metadata includes `compaction_level`, `semantic_summary_count`, `semantic_summary_failed`, `global_fallback_used`, `deterministic_ledger_included`, `post_compaction_chars`, and `still_over_budget`.
 
 ---
 
