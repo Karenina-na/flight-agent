@@ -2,6 +2,7 @@ import json
 
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
+from src.observability import log_event
 from src.chat.runner import (
     conversation_trace_payload,
     debug_summary_payload,
@@ -434,9 +435,15 @@ def test_execution_step_summaries_exposes_context_compaction_stage():
                 "preserved_observation_count": 10,
                 "dropped_observation_count": 0,
                 "preview_truncated_count": 4,
+                "compaction_level": "l1_l3",
+                "semantic_skip_reason": "missing_summary_model",
+                "post_compaction_chars": 32000,
+                "final_model_request_chars": 32000,
+                "still_over_budget": True,
                 "compacted_state_preview": '{"layers":{"tool_observation_ledger":{"observations":[{"tool_name":"generic_lookup"}]}}}',
                 "compacted_state_preview_chars": 91,
                 "compacted_state_chars": 91,
+                "compacted_state_text_chars": 91,
                 "compacted_state_sha256": "abc123",
             },
         },
@@ -464,12 +471,58 @@ def test_execution_step_summaries_exposes_context_compaction_stage():
         "丢弃 0 条；Agent 可继续调用工具。"
     )
     assert steps[1]["details"]["estimate_chars"] == 56000
+    assert steps[1]["details"]["final_model_request_chars"] == 32000
+    assert steps[1]["details"]["semantic_skip_reason"] == "missing_summary_model"
+    assert steps[1]["details"]["still_over_budget"] is True
     assert steps[1]["stages"][1]["title"] == "压缩后信息"
     assert steps[1]["stages"][1]["details"]["compacted_state_preview"].startswith(
         '{"layers"'
     )
     assert steps[1]["details"]["compacted_state_sha256"] == "abc123"
     assert steps[2]["summary"] == "模型生成最终回复。"
+
+
+def test_execution_step_summaries_exposes_context_summary_lifecycle():
+    calls = [
+        {
+            "index": 1,
+            "type": "event",
+            "event": "context_summary_start",
+            "fields": {
+                "stage": "l3_tool_semantic",
+                "tool_name": "search_airfare_quotes",
+                "tool_call_id": "call-1",
+                "chunk_index": 1,
+                "chunk_count": 1,
+                "input_chars": 2362,
+            },
+        },
+        {
+            "index": 2,
+            "type": "event",
+            "event": "context_summary_end",
+            "fields": {
+                "stage": "l3_tool_semantic",
+                "tool_name": "search_airfare_quotes",
+                "tool_call_id": "call-1",
+                "chunk_index": 1,
+                "chunk_count": 1,
+                "status": "success",
+                "duration_ms": 1820,
+                "output_chars": 640,
+            },
+        },
+    ]
+
+    steps = execution_step_summaries(calls)
+
+    assert len(steps) == 1
+    assert steps[0]["kind"] == "context_summary"
+    assert steps[0]["title"] == "工具结果语义压缩"
+    assert steps[0]["status"] == "completed"
+    assert steps[0]["stages"][0]["details"]["input_chars"] == 2362
+    assert steps[0]["stages"][0]["details"]["output_chars"] == 640
+    assert steps[0]["stages"][0]["details"]["duration_ms"] == 1820
 
 
 def test_execution_step_summaries_exposes_model_text_and_requested_tools():
@@ -818,6 +871,64 @@ def test_run_agent_turn_falls_back_when_final_message_has_no_visible_text(tmp_pa
     assert turn["assistant_output"] == result.answer
 
 
+def test_run_agent_turn_falls_back_after_duplicate_loop_stop(tmp_path):
+    class DuplicateLoopAgent:
+        def invoke(self, *args, context=None, **kwargs):
+            log_event(
+                "tool_call_end",
+                context=context,
+                redact=False,
+                tool_call_id="call-quotes",
+                tool_name="search_airfare_quotes",
+                response_trace={
+                    "content": (
+                        '{"query":{"origin":"北京","destination":"上海",'
+                        '"departure_date":"2026-07-10"},'
+                        '"captured_at":"2026-07-09T17:47:02+08:00",'
+                        '"sources_used":["mock"],'
+                        '"quotes":[{"flight_number":"MU5101","airline":"东航",'
+                        '"origin_iata":"PEK","destination_iata":"SHA",'
+                        '"scheduled_departure":"2026-07-10T08:00",'
+                        '"price":560,"currency":"CNY"}],'
+                        '"limitations":["Prices are point-in-time quotes."]}'
+                    )
+                },
+            )
+            log_event(
+                "tool_call_end",
+                context=context,
+                redact=False,
+                tool_call_id="call-duplicate",
+                tool_name="search_airfare_quotes",
+                response_trace={
+                    "content": (
+                        '{"status":"react_loop_stop_requested",'
+                        '"stop_requested":true,'
+                        '"message":"Stop calling tools and produce an answer."}'
+                    )
+                },
+            )
+            return {"messages": [AIMessage(content="")]}
+
+    session = ChatSession(thread_id="web-loop-stop")
+
+    result = run_agent_turn(
+        "查一下北京到上海 2026-07-10 的机票",
+        session,
+        agent_instance=DuplicateLoopAgent(),
+        trace_dir=tmp_path / "traces",
+    )
+    payload = json.loads((tmp_path / "traces" / "web-loop-stop.json").read_text())
+    turn = payload["turns"][0]
+
+    assert result.status == "success"
+    assert "模型检测到重复工具调用已被系统拦截" in result.answer
+    assert "北京 → 上海" in result.answer
+    assert "MU5101" in result.answer
+    assert turn["tool_loop_stop_fallback_used"] is True
+    assert turn["calls"][-1]["event"] == "conversation_turn_end"
+
+
 def test_run_agent_turn_returns_error_payload_and_trace(tmp_path):
     class BrokenAgent:
         def invoke(self, *args, **kwargs):
@@ -1050,7 +1161,13 @@ def test_build_trace_tree_groups_turns_into_react_stages():
     assert turn["children"][0]["label"] == "User Input"
     assert turn["children"][0]["meta"]["calls"][0]["event"] == "conversation_turn_start"
     step = turn["children"][1]
-    assert step["label"] == "ReAct Step 1"
+    assert step["label"] == "ReAct Step 1: resolve_flight_locations"
+    assert step["summary"] == {
+        "events": 4,
+        "models": 2,
+        "tools": 1,
+        "tool_names": ["resolve_flight_locations"],
+    }
     assert step["meta"]["event_count"] == 4
     assert "calls" not in step["meta"]
     assert [child["type"] for child in step["children"]] == [
@@ -1059,6 +1176,7 @@ def test_build_trace_tree_groups_turns_into_react_stages():
     ]
     thought = step["children"][0]
     assert thought["label"] == "Thought / Model Call"
+    assert thought["summary"]["message_count"] == 1
     assert [call["event"] for call in thought["meta"]["calls"]] == [
         "model_call_start",
         "model_call_end",
@@ -1073,6 +1191,7 @@ def test_build_trace_tree_groups_turns_into_react_stages():
     tool = action["children"][0]
     assert tool["label"] == "Tool: resolve_flight_locations"
     assert tool["status"] == "completed"
+    assert tool["summary"]["args"] == {"locations": ["北京", "上海"]}
     assert tool["meta"]["request"]["args"] == {"locations": ["北京", "上海"]}
     assert tool["meta"]["response"] == {"content": '{"items":[]}'}
     assert [child["label"] for child in tool["children"]] == [

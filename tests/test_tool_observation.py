@@ -1,3 +1,5 @@
+import json
+
 from langchain.messages import AIMessage, ToolMessage
 
 from src.summarization.tool_observation import (
@@ -198,3 +200,44 @@ def test_compact_tool_observations_keeps_batch_task_cards_in_essential_mode():
     assert '"task_id": "d2"' in compact_text
     assert '"slot": "a"' in compact_text
     assert '"slot": "b"' in compact_text
+
+
+def test_model_text_uses_complete_stats_when_raw_preview_is_too_large():
+    messages = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "name": "generic_lookup",
+                    "args": {"scope": "all"},
+                }
+            ],
+        ),
+        ToolMessage(
+            content=json.dumps(
+                {
+                    "records": [
+                        {"name": "A", "amount": 1},
+                        {"name": "B", "amount": 5},
+                        {"name": "C", "amount": 9},
+                    ],
+                    "padding": "x" * 1800,
+                }
+            ),
+            name="generic_lookup",
+            tool_call_id="call-1",
+        ),
+    ]
+
+    ledger = compact_tool_observations(
+        build_tool_observations(messages),
+        budget_chars=4000,
+    )
+    model_text = ledger.to_model_text()
+
+    assert "records 共 3 条" in model_text
+    assert "records[].amount 范围 1 至 9" in model_text
+    assert "x" * 100 not in model_text
+    assert "result_shape" not in model_text
+    assert "result_stats" not in model_text

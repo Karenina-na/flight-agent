@@ -53,6 +53,12 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
             model=_get_str(llm_config, "model"),
             temperature=_get_float(llm_config, "temperature"),
             context_window_tokens=_get_int(llm_config, "context_window_tokens"),
+            timeout_seconds=_get_int_with_default(
+                llm_config,
+                "timeout_seconds",
+                120,
+            ),
+            max_retries=_get_int_with_default(llm_config, "max_retries", 1),
         ),
         agent=AgentSettings(
             default_thread_id=_get_str(agent_config, "default_thread_id"),
@@ -88,6 +94,26 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
             trim_tokens_to_summarize=_get_optional_int(
                 summarization_config,
                 "trim_tokens_to_summarize",
+            ),
+            timeout_seconds=_get_int_with_default(
+                summarization_config,
+                "timeout_seconds",
+                45,
+            ),
+            max_output_tokens=_get_int_with_default(
+                summarization_config,
+                "max_output_tokens",
+                768,
+            ),
+            max_retries=_get_int_with_default(
+                summarization_config,
+                "max_retries",
+                0,
+            ),
+            reasoning_enabled=_get_bool_with_default(
+                summarization_config,
+                "reasoning_enabled",
+                False,
             ),
         ),
         air_ticket=AirTicketSettings(
@@ -163,6 +189,20 @@ def _get_int(config: dict[str, Any], key: str) -> int:
     value = config.get(key)
     if value is None:
         raise ValueError(f"Missing required config value: {key}")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Config value '{key}' must be an int") from exc
+
+
+def _get_int_with_default(
+    config: dict[str, Any],
+    key: str,
+    default: int,
+) -> int:
+    value = config.get(key)
+    if value is None:
+        return default
     try:
         return int(value)
     except (TypeError, ValueError) as exc:

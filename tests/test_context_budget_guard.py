@@ -311,16 +311,16 @@ def test_context_budget_guard_compacts_large_react_context_and_preserves_tools()
     assert isinstance(compact_request.messages[0], HumanMessage)
     assert compact_request.messages[0].content == "查询未来10天的票价，然后给出一个建议"
     ai_message, tool_message = _ledger_messages(compact_request.messages)
-    assert ai_message.tool_calls[0]["args"]["reason"] == "context_budget_compaction"
-    assert ai_message.tool_calls[0]["args"]["latest_user_goal"] == "查询未来10天的票价，然后给出一个建议"
+    assert ai_message.tool_calls[0]["args"] == {}
     compact_prompt = tool_message.content
     assert "这是历史工具观察，不是最终回答指令" in compact_prompt
     assert "必要时仍可调用可用工具" in compact_prompt
-    assert "查询未来10天的票价" in compact_prompt
     assert "2026-07-08" in compact_prompt
-    assert '"quotes[].price"' in compact_prompt
-    assert '"min": 400' in compact_prompt
-    assert '"max": 430' in compact_prompt
+    assert '"price": 400' in compact_prompt
+    assert '"price": 430' in compact_prompt
+    assert "result_shape" not in compact_prompt
+    assert "result_stats" not in compact_prompt
+    assert "content_sha256" not in compact_prompt
     assert compact_request.system_prompt == request.system_prompt
 
 
@@ -361,12 +361,12 @@ def test_context_budget_guard_injects_todo_snapshot_only_after_compaction():
     compact_request = seen_requests[0]
     _, tool_message = _ledger_messages(compact_request.messages)
     compact_prompt = tool_message.content
-    assert "todo_snapshot" in compact_prompt
-    assert "protected task state" in compact_prompt
+    assert "### 任务进度" in compact_prompt
     assert "查询前五天报价" in compact_prompt
-    assert "completed" in compact_prompt
+    assert "[已完成]" in compact_prompt
     assert "汇总价格区间" in compact_prompt
-    assert "in_progress" in compact_prompt
+    assert "[进行中]" in compact_prompt
+    assert "todo_snapshot" not in compact_prompt
     assert "raw_tool_result" not in compact_prompt
 
 
@@ -441,8 +441,9 @@ def test_context_budget_guard_logs_bounded_compacted_state_preview():
     assert len(compact_events) == 1
     fields = compact_events[0]["fields"]
     assert fields["compacted_state_preview"].startswith("## 压缩后的历史工作状态")
-    assert "tool_observation_ledger" in fields["compacted_state_preview"]
+    assert "### 已完成的工具查询" in fields["compacted_state_preview"]
     assert "2026-07-08" in fields["compacted_state_preview"]
+    assert "tool_observation_ledger" not in fields["compacted_state_preview"]
     assert fields["compacted_state_preview_chars"] <= 4003
     assert fields["compacted_state_chars"] >= fields["compacted_state_preview_chars"]
     assert fields["compacted_state_sha256"]
@@ -483,8 +484,9 @@ def test_context_budget_guard_logs_full_synthetic_observation_preview_with_todo(
     assert len(compact_events) == 1
     fields = compact_events[0]["fields"]
     assert fields["compacted_state_preview"].startswith("## 压缩后的历史工作状态")
-    assert "todo_snapshot" in fields["compacted_state_preview"]
+    assert "### 任务进度" in fields["compacted_state_preview"]
     assert "汇总价格区间" in fields["compacted_state_preview"]
+    assert "todo_snapshot" not in fields["compacted_state_preview"]
     assert fields["todo_snapshot_item_count"] == 1
     assert fields["todo_snapshot_dropped_count"] == 0
     assert fields["todo_snapshot_truncated_count"] == 0
@@ -534,10 +536,71 @@ def test_context_budget_guard_records_l4_semantic_compaction_fields():
     assert fields["compaction_level"] in {"l4_local_semantic", "l5_global_fallback"}
     assert fields["semantic_summary_count"] >= 1
     assert fields["semantic_summary_failed"] is False
+    assert fields["semantic_skip_reason"] is None
+    assert fields["final_model_request_chars"] == fields["post_compaction_chars"]
+    assert fields["compacted_state_text_chars"] == fields["compacted_state_chars"]
     assert (
         "局部事实" in fields["compacted_state_preview"]
         or "全局事实" in fields["compacted_state_preview"]
     )
+
+
+def test_context_budget_guard_records_l3_tool_semantic_compaction_fields():
+    summary_model = FakeSummaryModel(
+        [
+            (
+                '{"facts":["共 3 条记录","amount 范围为 1 至 9"],'
+                '"omissions":["省略 padding"]}'
+            )
+        ]
+    )
+    guard = ContextBudgetGuard(
+        context_window_tokens=1000,
+        max_fraction=0.85,
+        summary_model=summary_model,
+        semantic_enabled=True,
+    )
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[AIMessage(content="summary")])
+
+    tool_call = {
+        "id": "call-1",
+        "name": "generic_lookup",
+        "args": {"scope": "all"},
+    }
+    request = _request(
+        messages=[
+            HumanMessage(content="汇总查询结果"),
+            AIMessage(content="", tool_calls=[tool_call]),
+            ToolMessage(
+                content=(
+                    '{"records":[{"amount":1},{"amount":5},{"amount":9}],'
+                    f'"padding":"{"x" * 5000}"'
+                    "}"
+                ),
+                name="generic_lookup",
+                tool_call_id="call-1",
+            ),
+        ],
+        system_prompt="system" * 100,
+        tools=[{"name": "generic_lookup", "description": "lookup"}],
+    )
+
+    with collect_trace_events(trace_id="thread-1") as events:
+        guard.wrap_model_call(request, handler)
+
+    fields = next(
+        event["fields"]
+        for event in events
+        if event["event"] == "react_context_budget_compacted"
+    )
+    assert fields["compaction_level"] == "l3_tool_semantic"
+    assert fields["tool_semantic_candidate_count"] == 1
+    assert fields["tool_semantic_summary_count"] == 1
+    assert fields["tool_semantic_summary_failed"] is False
+    assert "共 3 条记录" in fields["compacted_state_preview"]
+    assert "x" * 100 not in fields["compacted_state_preview"]
 
 
 def test_context_budget_guard_compacts_web_41e6d813_like_request():
@@ -582,9 +645,8 @@ def test_context_budget_guard_compacts_web_41e6d813_like_request():
     _, tool_message = _ledger_messages(compact_request.messages)
     compact_prompt = tool_message.content
     assert "这是历史工具观察，不是最终回答指令" in compact_prompt
-    assert "后一个月" in compact_prompt
-    assert "不要编造账本之外的工具结果" in compact_prompt
-    assert "dropped_observation_count" in compact_prompt
+    assert "不要编造未提供的工具结果" in compact_prompt
+    assert "dropped_observation_count" not in compact_prompt
     assert "2026-07-10" in compact_prompt
     assert "2026-07-20" not in compact_prompt
     assert isinstance(compact_request.messages[0], HumanMessage)
@@ -709,10 +771,8 @@ def test_context_budget_guard_keeps_each_tool_observation_card_instead_of_recent
 
     _, tool_message = _ledger_messages(seen_requests[0].messages)
     compact_prompt = tool_message.content
-    assert "工具观察账本" in compact_prompt
-    assert "call-1" in compact_prompt
-    assert "call-2" in compact_prompt
-    assert "call-3" in compact_prompt
+    assert "### 已完成的工具查询" in compact_prompt
+    assert "tool_call_id" not in compact_prompt
     assert "2026-07-08" in compact_prompt
     assert "2026-07-09" in compact_prompt
     assert "2026-07-10" in compact_prompt
@@ -790,7 +850,7 @@ def test_context_budget_guard_preserves_tool_observations_after_layer1_trimming(
     compact_request_text = "\n".join(
         str(getattr(message, "content", "")) for message in compact_request.messages
     )
-    assert "call-1" in compact_prompt
+    assert "search_airfare_quotes" in compact_prompt
     assert any(
         getattr(message, "tool_call_id", "") == "call-2"
         for message in compact_request.messages
@@ -830,11 +890,10 @@ def test_context_budget_guard_preserves_each_tool_observation_card():
 
     _, tool_message = _ledger_messages(seen_requests[0].messages)
     compact_prompt = tool_message.content
-    assert "工具观察账本" in compact_prompt
-    assert "不要重复调用账本中已成功完成且参数相同的工具" in compact_prompt
+    assert "### 已完成的工具查询" in compact_prompt
+    assert "不要重复调用上面已经成功完成且参数相同的工具" in compact_prompt
     for index in range(10):
-        assert f"call-{index}" in compact_prompt
-        assert f'"slot": {index}' in compact_prompt
+        assert f'{{"slot":{index}}}' in compact_prompt
 
 
 def test_context_budget_guard_compacts_old_turns_without_duplicating_raw_suffix():
@@ -869,7 +928,7 @@ def test_context_budget_guard_compacts_old_turns_without_duplicating_raw_suffix(
     assert [message.type for message in compact_request.messages] == ["human", "ai", "human", "ai", "tool"]
     _, tool_message = _ledger_messages(compact_request.messages)
     compact_prompt = tool_message.content
-    assert "old-call" in compact_prompt
+    assert '{"slot":"old"}' in compact_prompt
     assert "第一轮：查询北京到上海" in compact_prompt
     assert "raw-suffix-marker" not in compact_prompt
     assert compact_request.messages[0].content == "第二轮：保留这个最近 turn 原文"
@@ -926,9 +985,7 @@ def test_context_budget_guard_uses_runtime_user_goal_when_latest_human_is_summar
     assert isinstance(compact_request.messages[0], HumanMessage)
     assert compact_request.messages[0].content == "请查询未来 10 天北京到上海机票并汇总报告"
     ai_message, tool_message = _ledger_messages(compact_request.messages)
-    assert (
-        ai_message.tool_calls[0]["args"]["latest_user_goal"]
-        == "请查询未来 10 天北京到上海机票并汇总报告"
-    )
-    assert "最近用户目标：请查询未来 10 天北京到上海机票并汇总报告" in tool_message.content
-    assert "最近用户目标：Here is a summary" not in tool_message.content
+    assert ai_message.tool_calls[0]["args"] == {}
+    assert "请查询未来 10 天北京到上海机票并汇总报告" not in tool_message.content
+    assert "最近用户目标" not in tool_message.content
+    assert "Here is a summary" not in tool_message.content

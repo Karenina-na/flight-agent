@@ -18,6 +18,8 @@ class LLMSettings:
     model: str
     temperature: float
     context_window_tokens: int
+    timeout_seconds: int = 120
+    max_retries: int = 1
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,10 @@ class SummarizationSettings:
     trigger: WindowClauseSettings
     keep: WindowClauseSettings
     trim_tokens_to_summarize: int | None
+    timeout_seconds: int = 45
+    max_output_tokens: int = 768
+    max_retries: int = 0
+    reasoning_enabled: bool = False
 
 
 @dataclass(frozen=True)

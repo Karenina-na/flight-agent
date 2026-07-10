@@ -174,6 +174,7 @@ def _run_agent_turn_with_trace(
                     trace_events,
                 )[0].get("calls", [])
                 tool_fallback = fallback_answer_from_tool_results(current_calls)
+                tool_loop_stop_requested = _has_tool_loop_stop_requested(current_calls)
                 turn_trace["empty_visible_output"] = True
                 turn_trace["malformed_tool_call_text_seen"] = (
                     malformed_tool_call_text_seen
@@ -189,13 +190,22 @@ def _run_agent_turn_with_trace(
                         "The final assistant message contained tool-call-like "
                         "text outside the structured tool_calls protocol."
                     )
-                visible_fallback = tool_fallback or EMPTY_VISIBLE_OUTPUT_FALLBACK
+                visible_fallback = _visible_fallback_for_empty_output(
+                    tool_fallback=tool_fallback,
+                    tool_loop_stop_requested=tool_loop_stop_requested,
+                )
                 if tool_fallback:
                     turn_trace["limitations"].append(
                         "A deterministic fallback answer was generated from "
                         "successful current-turn tool results."
                     )
                     turn_trace["tool_result_fallback_used"] = True
+                if tool_loop_stop_requested:
+                    turn_trace["limitations"].append(
+                        "A repeated tool-call stop signal was observed; the runner "
+                        "generated a visible fallback instead of leaving the turn empty."
+                    )
+                    turn_trace["tool_loop_stop_fallback_used"] = True
                 assistant_parts.append(visible_fallback)
                 turn_trace["assistant_chunks"].append(visible_fallback)
                 assistant_chunk_count = 1
@@ -291,14 +301,62 @@ def fallback_answer_from_tool_results(calls: list[dict[str, Any]]) -> str | None
     return None
 
 
+def _visible_fallback_for_empty_output(
+    *,
+    tool_fallback: str | None,
+    tool_loop_stop_requested: bool,
+) -> str:
+    if tool_loop_stop_requested and tool_fallback:
+        return (
+            "模型检测到重复工具调用已被系统拦截，我先基于已经成功返回的工具结果给你摘要：\n\n"
+            f"{tool_fallback}"
+        )
+    if tool_loop_stop_requested:
+        return (
+            "模型检测到重复工具调用已被系统拦截，但本轮没有可用于生成摘要的成功工具结果。"
+            "请查看 Trace 中最近的工具结果，或缩小问题后重新发起查询。"
+        )
+    return tool_fallback or EMPTY_VISIBLE_OUTPUT_FALLBACK
+
+
+def _has_tool_loop_stop_requested(calls: list[dict[str, Any]]) -> bool:
+    for call in calls:
+        event = call.get("event")
+        if event == "react_duplicate_tool_call_blocked":
+            fields = call.get("fields")
+            if isinstance(fields, dict) and fields.get("stop_requested") is True:
+                return True
+        if call.get("type") != "tool" or event != "tool_call_end":
+            continue
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        raw_content = response.get("content")
+        if not isinstance(raw_content, str):
+            continue
+        try:
+            payload = json.loads(raw_content)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("stop_requested") is True:
+            return True
+        if payload.get("status") == "react_loop_stop_requested":
+            return True
+    return False
+
+
 def _airfare_quotes_fallback(call: dict[str, Any]) -> str | None:
-    response = call.get("response") or {}
-    raw_content = response.get("content")
+    raw_content = _tool_response_content(call)
     if not isinstance(raw_content, str):
         return None
     try:
         payload = json.loads(raw_content)
     except json.JSONDecodeError:
+        return None
+
+    if _is_tool_guard_response(payload):
         return None
 
     query = payload.get("query") or {}
@@ -345,6 +403,27 @@ def _airfare_quotes_fallback(call: dict[str, Any]) -> str | None:
         lines.extend(["", "**限制：**"])
         lines.extend(f"- {item}" for item in limitations)
     return "\n".join(lines)
+
+
+def _tool_response_content(call: dict[str, Any]) -> str | None:
+    response = call.get("response")
+    if isinstance(response, dict) and isinstance(response.get("content"), str):
+        return response["content"]
+
+    fields = call.get("fields")
+    if not isinstance(fields, dict):
+        return None
+    response_trace = fields.get("response_trace")
+    if isinstance(response_trace, dict) and isinstance(response_trace.get("content"), str):
+        return response_trace["content"]
+    return None
+
+
+def _is_tool_guard_response(payload: dict[str, Any]) -> bool:
+    status = payload.get("status")
+    if status in {"duplicate_blocked", "react_loop_stop_requested"}:
+        return True
+    return payload.get("stop_requested") is True
 
 
 def _string_or_joined(value: object) -> str:
@@ -691,6 +770,23 @@ def execution_step_summaries(calls: list[dict[str, Any]]) -> list[dict[str, Any]
             steps.append(_context_compaction_step(call))
             index += 1
             continue
+        if event == "context_summary_start":
+            summary_calls = [call]
+            if index + 1 < len(calls):
+                next_call = calls[index + 1]
+                if next_call.get("event") in {
+                    "context_summary_end",
+                    "context_summary_error",
+                }:
+                    summary_calls.append(next_call)
+                    index += 1
+            steps.append(_context_summary_step(summary_calls))
+            index += 1
+            continue
+        if event in {"context_summary_end", "context_summary_error"}:
+            steps.append(_context_summary_step([call]))
+            index += 1
+            continue
         if call_type == "model" and event == "model_call_start":
             model_calls = [call]
             next_index = index + 1
@@ -824,6 +920,12 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
                     "dropped_observation_count": dropped_count,
                     "preview_truncated_count": fields.get("preview_truncated_count"),
                     "compacted_request_chars": fields.get("compacted_request_chars"),
+                    "compacted_state_text_chars": fields.get("compacted_state_text_chars"),
+                    "final_model_request_chars": fields.get("final_model_request_chars"),
+                    "post_compaction_chars": fields.get("post_compaction_chars"),
+                    "still_over_budget": fields.get("still_over_budget"),
+                    "compaction_level": fields.get("compaction_level"),
+                    "semantic_skip_reason": fields.get("semantic_skip_reason"),
                     "compaction_mode": fields.get("compaction_mode"),
                     "compacted_message_count": fields.get("compacted_message_count"),
                     "compacted_tool_count": fields.get("compacted_tool_count"),
@@ -854,11 +956,77 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
             "dropped_observation_count": dropped_count,
             "preview_truncated_count": fields.get("preview_truncated_count"),
             "compacted_request_chars": fields.get("compacted_request_chars"),
+            "compacted_state_text_chars": fields.get("compacted_state_text_chars"),
+            "final_model_request_chars": fields.get("final_model_request_chars"),
+            "post_compaction_chars": fields.get("post_compaction_chars"),
+            "still_over_budget": fields.get("still_over_budget"),
+            "compaction_level": fields.get("compaction_level"),
+            "semantic_skip_reason": fields.get("semantic_skip_reason"),
             "compaction_mode": fields.get("compaction_mode"),
             "compacted_message_count": fields.get("compacted_message_count"),
             "compacted_tool_count": fields.get("compacted_tool_count"),
             **compacted_state_details,
         },
+    }
+
+
+def _context_summary_step(calls: list[dict[str, Any]]) -> dict[str, Any]:
+    first_call = calls[0] if calls else {}
+    last_call = calls[-1] if calls else {}
+    start_fields = (
+        first_call.get("fields")
+        if isinstance(first_call.get("fields"), dict)
+        else {}
+    )
+    end_fields = (
+        last_call.get("fields")
+        if isinstance(last_call.get("fields"), dict)
+        else {}
+    )
+    details = {**start_fields, **end_fields}
+    last_event = str(last_call.get("event") or "")
+    if last_event == "context_summary_error":
+        status = "error"
+    elif last_event == "context_summary_end":
+        status = "completed"
+    else:
+        status = "running"
+    stage = str(details.get("stage") or "context_summary")
+    title = {
+        "l3_tool_semantic": "工具结果语义压缩",
+        "local_semantic_summary": "历史上下文摘要",
+        "global_fallback_summary": "全局兜底摘要",
+    }.get(stage, "上下文摘要")
+    if status == "completed":
+        summary = f"摘要完成，用时 {details.get('duration_ms', 0)} ms。"
+    elif status == "error":
+        summary = (
+            f"摘要失败：{details.get('error_type') or '未知错误'}；"
+            "系统将使用压缩回退结果继续执行。"
+        )
+    else:
+        tool_name = details.get("tool_name")
+        summary = (
+            f"正在压缩工具 {tool_name} 的返回结果。"
+            if tool_name
+            else "正在生成上下文摘要。"
+        )
+    return {
+        "index": first_call.get("index"),
+        "kind": "context_summary",
+        "title": title,
+        "status": status,
+        "event_count": len(calls),
+        "summary": summary,
+        "stages": [
+            {
+                "kind": "context_summary",
+                "title": title,
+                "status": status,
+                "summary": summary,
+                "details": details,
+            }
+        ],
     }
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Any
 
@@ -65,6 +65,95 @@ class CompactObservationLedger:
     def to_prompt_text(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2, default=str)
 
+    def to_model_text(self) -> str:
+        """Render only the tool facts needed by the model."""
+        if not self.observations:
+            return "- 没有保留下来的历史工具结果。"
+
+        lines = [
+            _observation_model_line(index, observation)
+            for index, observation in enumerate(self.observations, start=1)
+        ]
+        if self.dropped_observation_count:
+            lines.append(
+                f"- 另有 {self.dropped_observation_count} 条较早工具结果因上下文预算未保留。"
+            )
+        return "\n".join(lines)
+
+    def with_semantic_summaries(
+        self,
+        summaries_by_tool_call_id: dict[str, dict[str, Any]],
+        *,
+        args_by_tool_call_id: dict[str, dict[str, Any]] | None = None,
+    ) -> CompactObservationLedger:
+        """Attach validated L3 summaries without changing diagnostic source data."""
+        observations = []
+        for observation in self.observations:
+            tool_call_id = str(observation.get("tool_call_id") or "")
+            summary = summaries_by_tool_call_id.get(tool_call_id)
+            updated = dict(observation)
+            if args_by_tool_call_id and tool_call_id in args_by_tool_call_id:
+                updated["args"] = args_by_tool_call_id[tool_call_id]
+            if summary:
+                updated["semantic_summary"] = summary
+            observations.append(updated)
+        return replace(self, observations=observations)
+
+    def with_lossless_results(
+        self,
+        results_by_tool_call_id: dict[str, str],
+        *,
+        args_by_tool_call_id: dict[str, dict[str, Any]] | None = None,
+        names_by_tool_call_id: dict[str, str] | None = None,
+    ) -> CompactObservationLedger:
+        """Restore complete tool results when they fit the compacted budget."""
+        observations: list[dict[str, Any]] = []
+        restored_ids: set[str] = set()
+        for observation in self.observations:
+            updated = dict(observation)
+            tool_call_id = str(updated.get("tool_call_id") or "")
+            content = results_by_tool_call_id.get(tool_call_id)
+            if content is not None:
+                updated["result_preview"] = content
+                updated["result_preview_truncated"] = False
+                updated["lossless_result"] = True
+                restored_ids.add(tool_call_id)
+            if args_by_tool_call_id and tool_call_id in args_by_tool_call_id:
+                updated["args"] = args_by_tool_call_id[tool_call_id]
+            observations.append(updated)
+
+        for tool_call_id, content in results_by_tool_call_id.items():
+            if tool_call_id in restored_ids:
+                continue
+            observations.append(
+                {
+                    "tool_name": (
+                        names_by_tool_call_id or {}
+                    ).get(tool_call_id, "tool"),
+                    "tool_call_id": tool_call_id,
+                    "args": (args_by_tool_call_id or {}).get(tool_call_id, {}),
+                    "status": "success",
+                    "result_preview": content,
+                    "result_preview_truncated": False,
+                    "lossless_result": True,
+                }
+            )
+
+        preserved_count = len(observations)
+        observation_count = max(self.observation_count, preserved_count)
+        return replace(
+            self,
+            observation_count=observation_count,
+            preserved_observation_count=preserved_count,
+            dropped_observation_count=max(observation_count - preserved_count, 0),
+            preview_truncated_count=sum(
+                1
+                for observation in observations
+                if observation.get("result_preview_truncated")
+            ),
+            observations=observations,
+        )
+
 
 def build_tool_observations(messages: list[Any]) -> list[ToolObservation]:
     """Build generic observation cards from completed tool messages."""
@@ -93,7 +182,7 @@ def build_tool_observations(messages: list[Any]) -> list[ToolObservation]:
         parsed = _parse_json(content)
         result_value: Any = parsed if parsed is not None else content_text
         result_shape = json_shape_summary(result_value)
-        result_preview = _truncate(_preview_text(result_value), DEFAULT_PREVIEW_CHARS)
+        result_preview = _preview_text(result_value)
         result_stats = json_stats_summary(result_value)
         if _is_batch_tool_result(result_value):
             result_shape = _batch_result_shape(result_value)
@@ -233,6 +322,7 @@ def _shape(value: Any, *, depth: int, max_depth: int) -> dict[str, Any]:
 def _observation_card(observation: ToolObservation, *, preview_chars: int) -> dict[str, Any]:
     card = observation.to_dict()
     card["result_preview"] = _truncate(observation.result_preview, preview_chars)
+    card["result_preview_truncated"] = len(observation.result_preview) > preview_chars
     return card
 
 
@@ -245,6 +335,7 @@ def _essential_observation_card(observation: ToolObservation) -> dict[str, Any]:
         "result_shape": _essential_shape(observation.result_shape),
         "result_stats": _essential_stats(observation.result_stats),
         "result_preview": "",
+        "result_preview_truncated": bool(observation.result_preview),
         "content_sha256": observation.content_sha256[:16],
     }
 
@@ -282,6 +373,102 @@ def _essential_stats(stats: dict[str, Any]) -> dict[str, Any]:
     if numbers:
         compact["numbers"] = numbers
     return compact
+
+
+def _observation_model_line(index: int, observation: dict[str, Any]) -> str:
+    tool_name = str(observation.get("tool_name") or "未知工具")
+    status = _model_status(str(observation.get("status") or ""))
+    args = observation.get("args")
+    args_text = (
+        json.dumps(args, ensure_ascii=False, separators=(",", ":"), default=str)
+        if isinstance(args, dict) and args
+        else "无"
+    )
+    result_text = _model_result_text(observation)
+    return (
+        f"{index}. {tool_name}；参数：{args_text}；状态：{status}；"
+        f"结果摘要：{result_text}"
+    )
+
+
+def _model_status(status: str) -> str:
+    labels = {
+        "success": "成功",
+        "error": "失败",
+        "failed": "失败",
+        "duplicate_blocked": "重复调用已阻止",
+    }
+    return labels.get(status.strip().lower(), status or "未知")
+
+
+def _model_result_text(observation: dict[str, Any]) -> str:
+    preview = str(observation.get("result_preview") or "").strip()
+    if observation.get("lossless_result") and preview:
+        return f"完整工具结果：{preview}"
+
+    semantic_summary = observation.get("semantic_summary")
+    if isinstance(semantic_summary, dict):
+        semantic_text = _semantic_summary_text(semantic_summary)
+        if semantic_text:
+            return semantic_text
+
+    stats_text = _model_stats_text(observation.get("result_stats"))
+    preview_truncated = bool(observation.get("result_preview_truncated"))
+    if stats_text:
+        if preview and not preview_truncated:
+            return f"{stats_text}；完整结果：{preview}"
+        return stats_text
+    if preview and not preview_truncated:
+        return preview
+    return "未保留结果明细。"
+
+
+def _model_stats_text(stats: Any) -> str:
+    if not isinstance(stats, dict):
+        return ""
+    parts: list[str] = []
+    batch_summary = stats.get("batch_summary")
+    if isinstance(batch_summary, dict) and batch_summary:
+        parts.append(
+            json.dumps(
+                batch_summary,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+        )
+    for path, data in (stats.get("arrays") or {}).items():
+        if isinstance(data, dict) and data.get("length") is not None:
+            parts.append(f"{path} 共 {data['length']} 条")
+    for path, data in (stats.get("numbers") or {}).items():
+        if not isinstance(data, dict):
+            continue
+        minimum = data.get("min")
+        maximum = data.get("max")
+        if minimum is None and maximum is None:
+            continue
+        if minimum == maximum:
+            parts.append(f"{path} 为 {minimum}")
+        else:
+            parts.append(f"{path} 范围 {minimum} 至 {maximum}")
+    return "；".join(parts)
+
+
+def _semantic_summary_text(summary: dict[str, Any]) -> str:
+    facts = [
+        item.strip()
+        for item in summary.get("facts", [])
+        if isinstance(item, str) and item.strip()
+    ]
+    omissions = [
+        item.strip()
+        for item in summary.get("omissions", [])
+        if isinstance(item, str) and item.strip()
+    ]
+    parts = list(facts)
+    if omissions:
+        parts.append("省略信息：" + "；".join(omissions))
+    return "；".join(parts)
 
 
 def _is_batch_tool_result(value: Any) -> bool:
@@ -325,7 +512,7 @@ def _batch_result_preview(value: dict[str, Any]) -> str:
         "summary": value.get("summary"),
         "limitations": value.get("limitations", []),
     }
-    return _truncate(_preview_text(preview), DEFAULT_PREVIEW_CHARS)
+    return _preview_text(preview)
 
 
 def _batch_result_stats(value: dict[str, Any]) -> dict[str, Any]:

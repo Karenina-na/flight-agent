@@ -1700,6 +1700,53 @@ TRACE_HTML = r"""<!doctype html>
       padding: 10px;
       background: #fbfcff;
     }
+    .node-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .node-summary-item {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      padding: 8px;
+      min-width: 0;
+    }
+    .node-summary-key {
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 3px;
+    }
+    .node-summary-value {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .json-block {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .json-block-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 9px;
+      border-bottom: 1px solid var(--line);
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .json-copy-btn {
+      padding: 4px 8px;
+      border-radius: 5px;
+      font-size: 12px;
+      line-height: 1;
+    }
     .node-meta {
       margin: 0;
       padding: 10px;
@@ -1780,7 +1827,10 @@ TRACE_HTML = r"""<!doctype html>
         <div id="traceTree" class="trace-tree"></div>
       </section>
       <section class="panel raw-panel">
-        <h2>Raw JSON</h2>
+        <div class="json-block-header">
+          <h2>Raw JSON</h2>
+          <button id="copyRawTraceBtn" class="json-copy-btn" type="button">复制 JSON</button>
+        </div>
         <pre id="rawTrace">{}</pre>
       </section>
     </div>
@@ -1798,12 +1848,14 @@ TRACE_HTML = r"""<!doctype html>
     const refreshTraceBtn = document.querySelector("#refreshTraceBtn");
     const expandTraceBtn = document.querySelector("#expandTraceBtn");
     const collapseTraceBtn = document.querySelector("#collapseTraceBtn");
+    const copyRawTraceBtn = document.querySelector("#copyRawTraceBtn");
     const traceOpenState = new Map();
     const metaScrollState = new Map();
     let traceOpenStateInitialized = false;
     let currentTraceTreeSignature = "";
     let currentRawTraceSignature = "";
     let currentTraceRevision = "";
+    let currentRawTraceText = "{}";
 
     function escapeHtml(value) {
       return String(value)
@@ -1829,6 +1881,90 @@ TRACE_HTML = r"""<!doctype html>
           return `<span class="json-number">${match}</span>`;
         }
       );
+    }
+
+    function compactDisplayValue(value) {
+      if (Array.isArray(value)) return value.length ? value.join(", ") : "-";
+      if (value && typeof value === "object") return JSON.stringify(value);
+      if (value === null || value === undefined || value === "") return "-";
+      return String(value);
+    }
+
+    function copyText(text, button) {
+      const done = () => {
+        const original = button.textContent;
+        button.textContent = "已复制";
+        window.setTimeout(() => { button.textContent = original; }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(() => {});
+        return;
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+      done();
+    }
+
+    function jsonBlockElement(title, value, key) {
+      const block = document.createElement("div");
+      block.className = "json-block";
+
+      const header = document.createElement("div");
+      header.className = "json-block-header";
+
+      const label = document.createElement("span");
+      label.textContent = title;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "json-copy-btn";
+      button.textContent = "复制 JSON";
+
+      const text = safeJson(value);
+      button.addEventListener("click", () => copyText(text, button));
+      header.append(label, button);
+
+      const pre = document.createElement("pre");
+      pre.className = "node-meta";
+      pre.dataset.metaKey = key;
+      pre.innerHTML = highlightedJson(value);
+
+      block.append(header, pre);
+      return block;
+    }
+
+    function summaryGridElement(summary) {
+      const entries = Object.entries(summary || {}).filter(([, value]) => {
+        if (value === null || value === undefined || value === "") return false;
+        if (Array.isArray(value)) return value.length > 0;
+        return true;
+      });
+      if (!entries.length) return null;
+
+      const grid = document.createElement("div");
+      grid.className = "node-summary-grid";
+      for (const [key, value] of entries) {
+        const item = document.createElement("div");
+        item.className = "node-summary-item";
+
+        const keyEl = document.createElement("div");
+        keyEl.className = "node-summary-key";
+        keyEl.textContent = key;
+
+        const valueEl = document.createElement("div");
+        valueEl.className = "node-summary-value";
+        valueEl.textContent = compactDisplayValue(value);
+
+        item.append(keyEl, valueEl);
+        grid.appendChild(item);
+      }
+      return grid;
     }
 
     function captureTraceOpenState() {
@@ -1893,6 +2029,7 @@ TRACE_HTML = r"""<!doctype html>
     function renderRawTrace(trace, revision, options = {}) {
       const rawSignature = revision || `${trace.thread_id || ""}:${trace.turn_count || 0}:${trace.event_count || 0}`;
       if (!options.forceRaw && rawSignature === currentRawTraceSignature) return;
+      currentRawTraceText = safeJson(trace);
       rawTraceEl.innerHTML = highlightedJson(trace);
       currentRawTraceSignature = rawSignature;
     }
@@ -1976,12 +2113,13 @@ TRACE_HTML = r"""<!doctype html>
       const body = document.createElement("div");
       body.className = "node-body";
 
+      if (node.summary && Object.keys(node.summary).length) {
+        const summaryGrid = summaryGridElement(node.summary);
+        if (summaryGrid) body.appendChild(summaryGrid);
+      }
+
       if (node.meta && Object.keys(node.meta).length) {
-        const meta = document.createElement("pre");
-        meta.className = "node-meta";
-        meta.dataset.metaKey = nodeKey;
-        meta.innerHTML = highlightedJson(node.meta);
-        body.appendChild(meta);
+        body.appendChild(jsonBlockElement("节点详情 JSON", node.meta, nodeKey));
       }
 
       const children = node.children || [];
@@ -2030,6 +2168,7 @@ TRACE_HTML = r"""<!doctype html>
     refreshTraceBtn.addEventListener("click", () => loadTrace({forceTree: true}));
     expandTraceBtn.addEventListener("click", () => setTraceOpen(true));
     collapseTraceBtn.addEventListener("click", () => setTraceOpen(false));
+    copyRawTraceBtn.addEventListener("click", () => copyText(currentRawTraceText, copyRawTraceBtn));
 
     loadTrace();
     window.setInterval(() => loadTrace(), 3000);

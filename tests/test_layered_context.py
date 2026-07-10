@@ -61,6 +61,44 @@ def test_layered_context_summarizes_assistant_visible_state_and_tool_calls():
     assert '"origin": "北京"' in text
 
 
+def test_layered_context_model_text_hides_internal_diagnostic_fields():
+    messages = [
+        HumanMessage(content="查询北京到上海"),
+        AIMessage(
+            content="正在查询。",
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "name": "search_airfare_quotes",
+                    "args": {"origin": "北京", "destination": "上海"},
+                }
+            ],
+        ),
+        ToolMessage(
+            content='{"quotes":[{"price":500},{"price":700}]}',
+            name="search_airfare_quotes",
+            tool_call_id="call-1",
+        ),
+        HumanMessage(content="请汇总"),
+    ]
+
+    state = build_layered_context_state(messages, budget_chars=8000)
+    model_text = state.to_model_text()
+    debug_data = state.to_dict()
+
+    assert "查询北京到上海" in model_text
+    assert "search_airfare_quotes" in model_text
+    assert '"origin":"北京"' in model_text
+    assert "500" in model_text
+    assert "content_sha256" not in model_text
+    assert "source_message_index" not in model_text
+    assert "result_shape" not in model_text
+    assert "result_stats" not in model_text
+    assert "budget_chars" not in model_text
+    assert debug_data["budget_chars"] == 8000
+    assert debug_data["layers"]["tool_observation_ledger"]["observations"][0]["content_sha256"]
+
+
 def test_layered_context_keeps_tool_observations_before_dropping_message_cards():
     messages = [
         HumanMessage(content="批量查询多个对象"),

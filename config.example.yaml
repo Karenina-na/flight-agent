@@ -5,6 +5,8 @@ llm:
   model: "qwen3.5-4b-mlx"
   temperature: 0.3
   context_window_tokens: 8192
+  timeout_seconds: 120
+  max_retries: 1
 
 agent:
   default_thread_id: "1"
@@ -28,6 +30,10 @@ observability:
 summarization:
   enabled: true
   model: "main"
+  timeout_seconds: 45
+  max_output_tokens: 768
+  max_retries: 0
+  reasoning_enabled: false
   trigger:
     type: "fraction"
     value: 0.55

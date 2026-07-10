@@ -317,7 +317,12 @@ def test_trace_page_renders_full_synced_trace_viewer():
     assert "window.requestAnimationFrame(() => restoreScrollState(scrollState))" in TRACE_HTML
     assert "metaScrollState" in TRACE_HTML
     assert 'document.querySelectorAll(".node-meta")' in TRACE_HTML
-    assert "meta.dataset.metaKey = nodeKey" in TRACE_HTML
+    assert "pre.dataset.metaKey = key" in TRACE_HTML
+    assert 'id="copyRawTraceBtn"' in TRACE_HTML
+    assert "copyRawTraceBtn.addEventListener" in TRACE_HTML
+    assert "jsonBlockElement(\"节点详情 JSON\", node.meta, nodeKey)" in TRACE_HTML
+    assert "复制 JSON" in TRACE_HTML
+    assert "summaryGridElement(node.summary)" in TRACE_HTML
     assert "currentTraceTreeSignature" in TRACE_HTML
     assert "nextTreeSignature !== currentTraceTreeSignature" in TRACE_HTML
     assert "loadTrace({forceTree: true})" in TRACE_HTML

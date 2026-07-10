@@ -101,6 +101,12 @@ class ContextBudgetGuard(AgentMiddleware):
             estimate_request_chars=_request_size_estimate,
             semantic_enabled=self.semantic_enabled,
             summary_model=self.summary_model,
+            summary_event_callback=lambda event, fields: log_event(
+                event,
+                context=_request_context(request),
+                redact=False,
+                **fields,
+            ),
         )
         if compaction_result is None:
             return request
@@ -191,6 +197,8 @@ def _log_context_budget_compacted(
         preserved_assistant_message_count=ledger.preserved_assistant_message_count,
         dropped_assistant_message_count=ledger.dropped_assistant_message_count,
         compacted_request_chars=len(compacted_state_text),
+        compacted_state_text_chars=len(compacted_state_text),
+        final_model_request_chars=compaction_result.post_compaction_chars,
         original_message_count=len(request.messages),
         compacted_message_count=len(compaction_result.request.messages),
         raw_message_count=compaction_result.raw_message_count,
@@ -216,6 +224,14 @@ def _log_context_budget_compacted(
         compaction_level=compaction_result.compaction_level,
         semantic_summary_count=compaction_result.semantic_summary_count,
         semantic_summary_failed=compaction_result.semantic_summary_failed,
+        tool_semantic_candidate_count=len(
+            compaction_result.tool_semantic_candidates or []
+        ),
+        tool_semantic_summary_count=compaction_result.tool_semantic_summary_count,
+        tool_semantic_summary_failed=compaction_result.tool_semantic_summary_failed,
+        semantic_skip_reason=compaction_result.semantic_skip_reason,
+        semantic_error_stage=compaction_result.semantic_error_stage,
+        semantic_error_type=compaction_result.semantic_error_type,
         global_fallback_used=compaction_result.global_fallback_used,
         deterministic_ledger_included=compaction_result.deterministic_ledger_included,
         post_compaction_chars=compaction_result.post_compaction_chars,

@@ -13,6 +13,7 @@ from src.prompt.middleware import (
     build_memory_prompt_addendum,
     build_skill_prompt_addendum,
 )
+from src.prompt.tool_summary import build_tool_result_summary_messages
 
 __all__ = [
     "CORE_PROMPT",
@@ -26,4 +27,5 @@ __all__ = [
     "build_memory_prompt_addendum",
     "build_skill_prompt_addendum",
     "build_system_prompt",
+    "build_tool_result_summary_messages",
 ]

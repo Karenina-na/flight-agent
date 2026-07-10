@@ -119,10 +119,16 @@ long one-shot ReAct workflows such as "query many dates and then summarize".
 After budget pressure triggers, `src/summarization/context_pipeline.py`
 constructs the transient compacted request in stages:
 
-1. L1-L3 deterministic compaction via `build_context_compaction_request()`.
-2. L4 local semantic summary if the deterministic request is still over budget
-   and semantic compaction is enabled.
-3. L5 global fallback summary if L4 is still over budget.
+1. L1-L2 deterministic trimming and observation-ledger construction via
+   `build_context_compaction_request()`.
+2. For each oversized ToolMessage, first restore the complete tool result into
+   the transient ledger and re-estimate the request. If that lossless view fits,
+   the pipeline returns `l3_lossless_preserved` without calling a summary model.
+3. Only when the complete tool results do not fit, run L3 per-tool semantic
+   compression. JSON is split only between complete records and text only
+   between complete lines.
+4. Run L4 local semantic summary if the L3 request is still over budget.
+5. Run L5 global fallback summary if L4 is still over budget.
 
 The pipeline uses partitioned context assembly rather than appending summary
 text directly to ordinary history. Protected todo state, recent raw messages,
@@ -130,14 +136,22 @@ the active user goal, deterministic history ledger, local semantic summaries,
 and global fallback summary are treated as separate partitions and rendered into
 one protocol-valid synthetic context observation.
 
-L4/L5 summary prompts live in `src/prompt/context_summary.py`. They require a
-JSON object with `facts`, `open_items`, and `evidence_refs`. If the summary
-model raises, times out through the caller, or returns invalid JSON, the request
-falls back to the deterministic L1-L3 compacted view and records the semantic
-failure in trace metadata.
+L3 summary prompts live in `src/prompt/tool_summary.py` and require `facts` and
+`omissions`. The prompt is scoped to one tool result and does not receive the
+global user goal, so it cannot reinterpret one partial result as the completion
+state of the whole task. L4/L5 prompts live in
+`src/prompt/context_summary.py` and require `facts`, `open_items`, and
+`evidence_refs`. If the summary model fails, L3 falls back to deterministic
+counts and numeric ranges. L4/L5 fall back to the latest successful compacted
+view and record semantic failure metadata.
 
-Todo is protected state. It is not summarized as ordinary history. The semantic
-summary input receives only a count-level todo reference, while the final
+Semantic compression uses an isolated model client rather than the main agent
+client. The summary client uses deterministic temperature, a bounded completion
+size, no retries by default, a short timeout, and disables model thinking when
+the configured chat template supports `enable_thinking`. These controls keep an
+internal summary from consuming the full agent turn while repeating reasoning.
+
+Todo is protected state. It is not included in L3-L5 summary inputs. The final
 context ledger still receives the bounded todo snapshot so status and ordering
 survive.
 

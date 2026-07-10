@@ -121,6 +121,49 @@ class CompactLayeredContextState:
     def to_prompt_text(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2, default=str)
 
+    def to_model_text(self) -> str:
+        """Render compacted history without exposing diagnostic field names."""
+        sections: list[str] = []
+        if self.old_user_messages:
+            user_lines = [
+                f"- {card['content_summary']}"
+                for card in self.old_user_messages
+                if card.get("content_summary")
+            ]
+            if user_lines:
+                sections.append("### 较早的用户目标\n" + "\n".join(user_lines))
+
+        if self.assistant_messages:
+            assistant_lines = [
+                f"- {card['content_summary']}"
+                for card in self.assistant_messages
+                if card.get("content_summary")
+            ]
+            if assistant_lines:
+                sections.append("### 已有回答与执行结论\n" + "\n".join(assistant_lines))
+
+        sections.append(
+            "### 已完成的工具查询\n"
+            f"{self.tool_observation_ledger.to_model_text()}"
+        )
+
+        omissions: list[str] = []
+        if self.dropped_old_user_message_count:
+            omissions.append(
+                f"{self.dropped_old_user_message_count} 条较早用户消息"
+            )
+        if self.dropped_assistant_message_count:
+            omissions.append(
+                f"{self.dropped_assistant_message_count} 条较早助手消息"
+            )
+        if omissions:
+            sections.append(
+                "### 信息边界\n- 因上下文预算，未保留"
+                + "、".join(omissions)
+                + "的原文。"
+            )
+        return "\n\n".join(sections)
+
 
 def build_layered_context_state(
     messages: list[Any],

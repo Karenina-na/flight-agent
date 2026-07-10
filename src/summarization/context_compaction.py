@@ -15,6 +15,10 @@ from src.summarization.layered_context import (
     build_layered_context_state,
     partition_messages_for_compaction,
 )
+from src.summarization.tool_semantic import (
+    ToolSummaryCandidate,
+    build_tool_summary_candidates,
+)
 from src.prompt import (
     CONTEXT_LEDGER_TOOL_NAME,
     build_context_ledger_tool_call_args,
@@ -55,10 +59,16 @@ class ContextCompactionResult:
     global_fallback_summary: dict[str, Any] | None = None
     semantic_summary_count: int = 0
     semantic_summary_failed: bool = False
+    tool_semantic_candidates: list[ToolSummaryCandidate] | None = None
+    tool_semantic_summary_count: int = 0
+    tool_semantic_summary_failed: bool = False
     global_fallback_used: bool = False
     deterministic_ledger_included: bool = True
     post_compaction_chars: int = 0
     still_over_budget: bool = False
+    semantic_skip_reason: str | None = None
+    semantic_error_stage: str | None = None
+    semantic_error_type: str | None = None
 
 
 def build_context_compaction_request(
@@ -80,6 +90,14 @@ def build_context_compaction_request(
         return None
 
     projection = project_layer_one_messages(compressed_messages)
+    tool_call_messages = [
+        message
+        for message in compressed_messages
+        if getattr(message, "tool_calls", None)
+    ]
+    tool_semantic_candidates = build_tool_summary_candidates(
+        [*tool_call_messages, *projection.messages]
+    )
     layered_state = build_layered_context_state(
         projection.messages,
         budget_chars=max(
@@ -111,13 +129,15 @@ def build_context_compaction_request(
         raw_message_count=len(recent_messages),
         layer_one_projection=projection,
         todo_snapshot=todo_snapshot,
+        tool_semantic_candidates=tool_semantic_candidates,
         raw_messages=recent_messages,
         synthetic_message_builder=lambda *,
+        ledger_override=None,
         local_semantic_summaries=None,
         global_fallback_summary=None,
         include_deterministic_ledger=True: synthetic_ledger_messages(
             latest_human_text=latest_human_text,
-            ledger=layered_state,
+            ledger=ledger_override or layered_state,
             estimate_chars=estimate_chars,
             threshold_chars=threshold_chars,
             todo_snapshot=todo_snapshot,

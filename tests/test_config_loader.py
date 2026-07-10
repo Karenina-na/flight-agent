@@ -14,6 +14,8 @@ llm:
   model: "test-model"
   temperature: 0.7
   context_window_tokens: 12345
+  timeout_seconds: 30
+  max_retries: 2
 
 agent:
   default_thread_id: "test-thread"
@@ -62,6 +64,8 @@ air_ticket:
     assert settings.llm.model == "test-model"
     assert settings.llm.temperature == 0.7
     assert settings.llm.context_window_tokens == 12345
+    assert settings.llm.timeout_seconds == 30
+    assert settings.llm.max_retries == 2
     assert settings.agent.default_thread_id == "test-thread"
     assert settings.summarization.enabled is True
     assert settings.summarization.model == "main"
@@ -70,6 +74,10 @@ air_ticket:
     assert settings.summarization.keep.type == "messages"
     assert settings.summarization.keep.value == 20
     assert settings.summarization.trim_tokens_to_summarize == 4000
+    assert settings.summarization.timeout_seconds == 45
+    assert settings.summarization.max_output_tokens == 768
+    assert settings.summarization.max_retries == 0
+    assert settings.summarization.reasoning_enabled is False
     assert settings.memory.checkpointer.type == "in_memory"
     assert settings.memory.store.enabled is True
     assert settings.memory.store.type == "in_memory"
@@ -94,6 +102,8 @@ def test_load_settings_falls_back_to_example_config(tmp_path: Path):
     assert settings.llm.model == "qwen3.5-4b-mlx"
     assert settings.llm.temperature == 0.3
     assert settings.llm.context_window_tokens == 8192
+    assert settings.llm.timeout_seconds == 120
+    assert settings.llm.max_retries == 1
     assert settings.agent.default_thread_id == "1"
     assert settings.memory.checkpointer.type == "in_memory"
     assert settings.memory.store.enabled is True
@@ -110,6 +120,10 @@ def test_load_settings_falls_back_to_example_config(tmp_path: Path):
     assert settings.summarization.keep.type == "fraction"
     assert settings.summarization.keep.value == 0.35
     assert settings.summarization.trim_tokens_to_summarize == 3000
+    assert settings.summarization.timeout_seconds == 45
+    assert settings.summarization.max_output_tokens == 768
+    assert settings.summarization.max_retries == 0
+    assert settings.summarization.reasoning_enabled is False
     assert settings.air_ticket.provider == "mock"
     assert settings.air_ticket.flyclaw.external_path == "external/FlyClaw"
     assert settings.air_ticket.flyclaw.timeout_seconds == 20

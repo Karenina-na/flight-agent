@@ -1,8 +1,12 @@
 import json
 
+from langchain.agents import create_agent
 from langchain.agents.middleware import ToolCallRequest
-from langchain.messages import ToolMessage
+from langchain.messages import AIMessage, ToolMessage
 from langchain.tools import ToolRuntime, tool
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langgraph.graph import END
+from langgraph.types import Command
 
 from src.guardrails import ParamAwareDuplicateToolCallGuard
 from src.runtime import Context
@@ -94,7 +98,9 @@ def test_duplicate_guard_blocks_repeated_tool_and_same_arguments():
     assert second.tool_call_id == "call-demo_lookup-request-1"
     assert payload["status"] == "duplicate_blocked"
     assert payload["duplicate_count"] == 1
-    assert "previous tool result" in payload["message"]
+    assert payload["stop_requested"] is False
+    assert "same tool with the same arguments" in payload["message"]
+    assert "produce an answer" in payload["message"]
 
 
 def test_duplicate_guard_allows_same_tool_with_different_arguments():
@@ -210,10 +216,73 @@ def test_duplicate_guard_requests_loop_stop_after_repeated_duplicates():
     guard.wrap_tool_call(_request(), handler)
     guard.wrap_tool_call(_request(), handler)
     response = guard.wrap_tool_call(_request(), handler)
-    payload = json.loads(response.content)
 
     assert calls == 1
+    assert isinstance(response, Command)
+    assert response.goto == END
+    assert response.update["jump_to"] == "end"
+    messages = response.update["messages"]
+    assert isinstance(messages[0], ToolMessage)
+    assert isinstance(messages[1], AIMessage)
+    assert messages[1].content == ""
+    assert messages[1].additional_kwargs["skypilot_react_loop_stop_requested"] is True
+    payload = json.loads(messages[0].content)
     assert payload["status"] == "react_loop_stop_requested"
     assert payload["duplicate_count"] == 3
     assert payload["loop_stop_after"] == 3
+    assert payload["stop_requested"] is True
     assert "Stop calling tools" in payload["message"]
+
+
+def test_duplicate_guard_ends_agent_run_after_repeated_identical_calls():
+    class ToolCallingFakeModel(FakeMessagesListChatModel):
+        invocation_count: int = 0
+
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _generate(self, *args, **kwargs):
+            self.invocation_count += 1
+            return super()._generate(*args, **kwargs)
+
+    repeated_args = {"origin": "北京", "destination": "上海", "limit": 20}
+    model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": f"call-{index}",
+                        "name": "demo_lookup",
+                        "args": repeated_args,
+                    }
+                ],
+            )
+            for index in range(1, 5)
+        ]
+    )
+    guard = ParamAwareDuplicateToolCallGuard(loop_stop_after=3)
+    test_agent = create_agent(
+        model=model,
+        tools=[demo_lookup],
+        middleware=[guard],
+    )
+
+    result = test_agent.invoke(
+        {"messages": [{"role": "user", "content": "查询北京到上海"}]},
+        config={"recursion_limit": 20},
+    )
+
+    assert model.invocation_count == 4
+    assert result["messages"][-1].content == ""
+    assert (
+        result["messages"][-1]
+        .additional_kwargs["skypilot_react_loop_stop_requested"]
+        is True
+    )
+    real_results = [
+        message
+        for message in result["messages"]
+        if isinstance(message, ToolMessage) and message.content == "北京->上海:20"
+    ]
+    assert len(real_results) == 1

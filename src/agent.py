@@ -14,6 +14,7 @@ from src.observability import configure_logging, build_observability_middleware
 from src.prompt import build_system_prompt
 from src.runtime import Context
 from src.skills import build_skill_middleware
+from src.summarization import build_summary_model
 from src.tools import get_tools
 
 settings = load_settings()
@@ -27,7 +28,10 @@ model = ChatOpenAI(
     output_version="responses/v1",
     use_responses_api=True,
     profile={"max_input_tokens": settings.llm.context_window_tokens},
+    timeout=settings.llm.timeout_seconds,
+    max_retries=settings.llm.max_retries,
 )
+summary_model = build_summary_model(settings.llm, settings.summarization)
 
 tools = get_tools()
 checkpointer = build_checkpointer(settings.memory.checkpointer)
@@ -38,7 +42,7 @@ middleware = [
     TodoListMiddleware(),
     build_agent_state_compaction_middleware(
         context_window_tokens=settings.llm.context_window_tokens,
-        summary_model=model,
+        summary_model=summary_model,
         semantic_enabled=settings.summarization.enabled,
     ),
     build_observability_middleware(redact=settings.observability.logging.redact),

@@ -89,7 +89,7 @@ The exact threshold can stay at the existing `max_fraction` initially; the impor
 | :--- | :--- | :--- | :--- | :--- |
 | **Layer 1: Zero-Cost Trimming** | After compaction mode starts | Historical messages | Rule filtering only: remove duplicate Tool outputs, drop low-value empty Tool-result rounds, merge adjacent User messages where protocol-safe. No semantic summary. | Very low |
 | **Layer 2: ReAct Trimming** | After Layer 1 if still large | Historical AI `reasoning` and tool-call traces | Deterministically remove old reasoning blocks and old function/tool-call templates from the transient compacted prefix. Do not generate reasoning summaries here. | Low |
-| **Layer 3: Tool Result Reduction** | After Layer 2 if still large | Large `ToolMessage` content | Deterministically reduce large outputs. JSON: keys, counts, numeric stats, samples. Text: head/tail/hash/omitted length. Logs/code: error stack and key lines only. | Low |
+| **Layer 3: Tool Result Semantic Compression** | After Layer 2 when large Tool results are present | Individual large `ToolMessage` content | Preserve the raw ToolMessage outside the transient request, split JSON/text only on complete record or line boundaries, then use the summary model to retain goal-relevant facts, values, sources, times, units, and limitations. Invalid summaries fall back to deterministic counts and numeric ranges. | Medium |
 | **Layer 4: Historical Turn Folding** | If still near/above budget | Older complete `User-AI-Tool` turns | LLM or deterministic summarizer creates an objective fact summary under 200 Chinese characters per folded block. | Medium |
 | **Layer 5: Global Fallback Summary** | If still above hard budget | Everything except protected anchors | Preserve system prompt, latest user goal, and active protocol anchors; compress the rest into a fact list under 400 Chinese characters. | High |
 
@@ -164,30 +164,14 @@ Tool returns raw result
 
 This avoids changing normal tool semantics and keeps trace/debug fidelity.
 
-Layer 3 output examples:
+Layer 3 model-facing output is rendered as concise facts rather than truncated
+JSON. For example:
 
-Large JSON:
-
-```json
-{
-  "status": "compacted_tool_result",
-  "raw_sha256": "...",
-  "shape": {"top_level_keys": ["query", "quotes", "limitations"], "quotes.length": 120},
-  "stats": {"quotes.price.min": 400, "quotes.price.max": 1880},
-  "samples": {"quotes.first": ["..."], "quotes.last": ["..."]}
-}
-```
-
-Large text:
-
-```json
-{
-  "status": "compacted_tool_result",
-  "raw_sha256": "...",
-  "text_head": "...",
-  "text_tail": "...",
-  "omitted_chars": 32000
-}
+```text
+search_airfare_quotes 查询成功。
+共获得 7 条报价，价格范围为 540–910 CNY。
+最低报价为 KN5977，540 CNY；最高报价为 CA1883，910 CNY。
+数据来源为 fliggy_mcp，报价为查询时点样本。
 ```
 
 ---
@@ -225,7 +209,7 @@ assert seen_requests[0] is request
 - [x] Add a pipeline method `_compaction_pipeline_request`.
 - [x] Preserve current `request.override(messages=...)` behavior only when the estimate crosses threshold.
 
-### Task 3: Implement Deterministic Layers 1-3
+### Task 3: Implement Deterministic Layers 1-2 and Tool Observation Fallback
 
 **Files:**
 - Modify: `src/guardrails/context_budget_guard.py`
@@ -236,7 +220,7 @@ assert seen_requests[0] is request
 - [x] Layer 1: replace low-value empty Tool outputs with short markers.
 - [x] Layer 1: merge adjacent User messages only when no tool protocol edge is between them.
 - [x] Layer 2: remove old reasoning blocks only inside compaction mode; any semantic reasoning summary belongs to Layer 4.
-- [x] Layer 3: compact large ToolMessage JSON/text into bounded structured summaries.
+- [x] Layer 3 fallback: preserve deterministic array counts and numeric ranges when semantic tool-result compression is unavailable.
 
 ### Task 4: Add Todo Snapshot Preservation
 
@@ -257,7 +241,7 @@ assert seen_requests[0] is request
 - [x] Bound todo snapshot size to avoid re-inflating compacted context.
 - [x] Do not make the model call todo tools during compression.
 
-### Task 5: Add LLM-Backed Layers 4-5
+### Task 5: Add LLM-Backed Layers 3-5
 
 **Files:**
 - Add: `src/summarization/context_pipeline.py`
@@ -267,20 +251,27 @@ assert seen_requests[0] is request
 
 - [x] Move L1-L5 orchestration into `src/summarization/context_pipeline.py`.
 - [x] Keep `ContextBudgetGuard` focused on threshold detection, pipeline invocation, and trace metadata.
+- [x] Layer 3: split oversized ToolMessage JSON/text on complete boundaries and summarize each result independently.
 - [x] Layer 4: when L1-L3 remains over budget, call the configured summary model with a bounded context view and inject a `local_semantic_summary`.
 - [x] Layer 5: when L4 remains over budget, call the summary model again using the current bounded assembly and inject a `global_fallback_summary`.
 - [x] Summary prompts live in `src/prompt/context_summary.py` and require structured JSON with `facts`, `open_items`, and `evidence_refs`.
-- [x] LLM summary failure falls back to the deterministic L1-L3 compacted view and records `semantic_summary_failed=true`.
-- [x] Todo remains protected state: the semantic summary model receives only a count-level todo reference, while the final synthetic ledger keeps the compact todo snapshot.
+- [x] L3 summary failure falls back to deterministic counts/ranges; L4/L5 failure falls back to the latest successful compacted view and records semantic failure metadata.
+- [x] Todo remains protected state: it is excluded from L3-L5 summary inputs, while the final synthetic ledger keeps the compact todo snapshot.
 
 Current implementation:
 
-- `build_context_pipeline_request()` first builds the deterministic L1-L3 compacted request through `build_context_compaction_request()`.
-- If the compacted request is already within budget, no summary model is called and `compaction_level="l1_l3"`.
-- If semantic compression is enabled and a summary model is available, L4 generates a local semantic summary from a bounded assembly containing protected todo metadata, deterministic history ledger, and existing semantic summaries.
+- `build_context_pipeline_request()` first applies deterministic L1-L2 trimming and constructs the observation ledger through `build_context_compaction_request()`.
+- If oversized ToolMessages are present, the pipeline first restores their complete results into the transient ledger and re-estimates the request. When that lossless view fits, it returns `compaction_level="l3_lossless_preserved"` without invoking the summary model.
+- If complete ToolMessages do not fit and semantic compression is available, L3 summarizes each result independently and sets `compaction_level="l3_tool_semantic"` when the resulting request fits.
+- L3 never cuts JSON in the middle of a record. Large JSON arrays are divided into complete-record chunks; text is divided on complete line boundaries.
+- The L3 prompt receives only the current tool name, actual call arguments, the current complete-boundary chunk, and deterministic statistics. It does not receive the global user goal and does not decide whether the overall task is complete.
+- If no L3 candidate exists and the deterministic compacted request is already within budget, no summary model is called and `compaction_level="l1_l3"`.
+- If L3 remains oversized, L4 generates a local semantic summary from the compacted history ledger and existing semantic summaries.
 - If L4 is still oversized, L5 switches to strict global fallback mode: raw recent messages, the latest user goal, protected todo snapshot, and the protocol-valid synthetic context ledger pair are preserved, but deterministic history ledger details are omitted from the ledger body and replaced by a `deterministic_history_omitted` notice plus the global fallback summary.
-- `settings.summarization.enabled=false` disables L4/L5 and keeps the pipeline deterministic.
-- Trace metadata includes `compaction_level`, `semantic_summary_count`, `semantic_summary_failed`, `global_fallback_used`, `deterministic_ledger_included`, `post_compaction_chars`, and `still_over_budget`.
+- `settings.summarization.enabled=false` disables L3-L5 model summaries and keeps the pipeline deterministic.
+- The summary client is isolated from the main agent client and uses `temperature=0`, configurable timeout/output limits, no retries by default, and disabled thinking by default.
+- L3/L4/L5 summary calls emit `context_summary_start`, `context_summary_end`, and `context_summary_error` lifecycle events. Invalid JSON and invalid output schemas both terminate with an error event and fall back to the latest successful compacted view.
+- Trace metadata includes `compaction_level`, `tool_semantic_candidate_count`, `tool_semantic_summary_count`, `tool_semantic_summary_failed`, `semantic_summary_count`, `semantic_summary_failed`, `global_fallback_used`, `deterministic_ledger_included`, `post_compaction_chars`, and `still_over_budget`.
 
 ---
 

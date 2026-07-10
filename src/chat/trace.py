@@ -253,6 +253,11 @@ def build_trace_tree(trace: dict[str, Any]) -> dict[str, Any]:
         "type": "session",
         "label": f"Session {trace.get('thread_id', '-')}",
         "status": _trace_tree_status(turns),
+        "summary": {
+            "thread_id": trace.get("thread_id"),
+            "turns": trace.get("turn_count", len(turns)),
+            "events": trace.get("event_count", len(trace.get("events", []))),
+        },
         "meta": {
             "thread_id": trace.get("thread_id"),
             "turn_count": trace.get("turn_count", len(turns)),
@@ -282,11 +287,25 @@ def _trace_turn_node(index: int, turn: object) -> dict[str, Any]:
 
     user_input = str(turn.get("user_input", ""))
     preview = _preview(user_input, fallback="empty input")
+    calls = turn.get("calls", [])
+    if not isinstance(calls, list):
+        calls = []
     return {
         "id": str(turn.get("turn_id") or f"turn-{index}"),
         "type": "turn",
         "label": f"Turn {index + 1}: {preview}",
         "status": str(turn.get("status", "unknown")),
+        "summary": {
+            "user": preview,
+            "assistant": _preview(
+                str(turn.get("assistant_output") or ""),
+                fallback="empty output",
+            ),
+            "calls": len(calls),
+            "model_calls": _count_calls(calls, call_type="model"),
+            "tool_calls": _count_calls(calls, call_type="tool", event_name="tool_call_start"),
+            "errors": _count_error_calls(calls),
+        },
         "meta": {
             "turn_index": turn.get("turn_index", index),
             "turn_id": turn.get("turn_id"),
@@ -324,6 +343,7 @@ def _trace_react_stage_nodes(turn: dict[str, Any]) -> list[dict[str, Any]]:
             "type": "react_input",
             "label": "User Input",
             "status": "completed",
+            "summary": {"user_input": _preview(str(turn.get("user_input") or ""), fallback="empty input", limit=120)},
             "meta": {
                 "user_input": turn.get("user_input"),
                 "calls": _json_safe_calls(
@@ -352,6 +372,10 @@ def _trace_react_stage_nodes(turn: dict[str, Any]) -> list[dict[str, Any]]:
                 "type": "react_agent",
                 "label": "Agent Run",
                 "status": _stage_status(agent_calls),
+                "summary": {
+                    "events": len(agent_calls),
+                    "status": _stage_status(agent_calls),
+                },
                 "meta": {
                     "event_count": len(agent_calls),
                     "calls": json_safe(agent_calls),
@@ -371,6 +395,11 @@ def _trace_react_stage_nodes(turn: dict[str, Any]) -> list[dict[str, Any]]:
             "type": "react_final",
             "label": "Final Response",
             "status": str(turn.get("status", "unknown")),
+            "summary": {
+                "output": _preview(str(assistant_output or ""), fallback="empty output", limit=120),
+                "reasoning": bool(turn.get("reasoning_block_seen") or turn.get("reasoning_text_seen")),
+                "error_type": turn.get("error_type"),
+            },
             "meta": {
                 "assistant_output": assistant_output,
                 "reasoning_block_seen": turn.get("reasoning_block_seen"),
@@ -396,6 +425,10 @@ def _trace_react_stage_nodes(turn: dict[str, Any]) -> list[dict[str, Any]]:
             "type": "raw_trace",
             "label": "Raw Debug",
             "status": "info",
+            "summary": {
+                "events": len(calls),
+                "note": "完整原始调用链，排查细节时展开。",
+            },
             "meta": {
                 "event_count": len(calls),
                 "raw_turn": json_safe(turn),
@@ -494,8 +527,20 @@ def _trace_react_step_nodes(
             step["status"] = "completed"
         else:
             step["status"] = "info"
+        step_calls = step.pop("_calls", [])
         step["meta"]["stage_count"] = len(step.get("children", []))
-        step["meta"]["event_count"] = len(step.pop("_calls", []))
+        step["meta"]["event_count"] = len(step_calls)
+        step["summary"] = {
+            "events": len(step_calls),
+            "models": _count_calls(step_calls, call_type="model"),
+            "tools": _count_calls(step_calls, call_type="tool", event_name="tool_call_start"),
+            "tool_names": _tool_names(step_calls),
+        }
+        if step["summary"]["tool_names"]:
+            step["label"] = (
+                f"{step['label']}: "
+                + ", ".join(step["summary"]["tool_names"][:3])
+            )
     return steps
 
 
@@ -510,6 +555,13 @@ def _react_compaction_node(
         "type": "react_compaction",
         "label": "State-Preserving Context Compaction",
         "status": "completed",
+        "summary": {
+            "estimate_chars": fields.get("estimate_chars"),
+            "threshold_chars": fields.get("threshold_chars"),
+            "preserved_observations": fields.get("preserved_observation_count"),
+            "dropped_observations": fields.get("dropped_observation_count"),
+            "compacted_request_chars": fields.get("compacted_request_chars"),
+        },
         "meta": {
             "step_index": step_number - 1,
             "event_count": 1,
@@ -538,11 +590,13 @@ def _react_stage_node(
     label: str,
     calls: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    summary = _react_stage_summary(stage_name, calls)
     return {
         "id": f"{step_id}:{stage_name}",
         "type": f"react_{stage_name}",
         "label": label,
         "status": _stage_status(calls),
+        "summary": summary,
         "meta": {
             "event_count": len(calls),
             "calls": json_safe(calls),
@@ -607,6 +661,10 @@ def _merge_tool_call_node(
             "type": "tool",
             "label": f"Tool: {call.get('tool_name', '-')}",
             "status": "started",
+            "summary": {
+                "tool": call.get("tool_name"),
+                "tool_call_id": call.get("tool_call_id"),
+            },
             "meta": {
                 "tool_call_id": call.get("tool_call_id"),
                 "tool_name": call.get("tool_name"),
@@ -623,8 +681,10 @@ def _merge_tool_call_node(
     node["meta"]["tool_name"] = node["meta"].get("tool_name") or call.get("tool_name")
     if "request" in call:
         node["meta"]["request"] = call["request"]
+        node["summary"]["args"] = _request_args_preview(call["request"])
     if "response" in call:
         node["meta"]["response"] = call["response"]
+        node["summary"]["response"] = _response_preview(call["response"])
     if call.get("event") == "tool_call_end":
         node["status"] = "completed"
     elif call.get("event") == "tool_call_error":
@@ -642,6 +702,7 @@ def _trace_event_node(call: dict[str, Any]) -> dict[str, Any]:
         "type": node_type,
         "label": _trace_event_label(call),
         "status": _trace_event_status(call),
+        "summary": _trace_event_summary(call),
         "meta": _trace_event_meta(call),
         "children": [],
     }
@@ -695,6 +756,132 @@ def _preview(value: str, *, fallback: str, limit: int = 42) -> str:
     if len(normalized) <= limit:
         return normalized
     return f"{normalized[:limit]}..."
+
+
+def _count_calls(
+    calls: list[object],
+    *,
+    call_type: str,
+    event_name: str | None = None,
+) -> int:
+    return sum(
+        1
+        for call in calls
+        if isinstance(call, dict)
+        and call.get("type") == call_type
+        and (event_name is None or call.get("event") == event_name)
+    )
+
+
+def _count_error_calls(calls: list[object]) -> int:
+    return sum(
+        1
+        for call in calls
+        if isinstance(call, dict) and str(call.get("event", "")).endswith("_error")
+    )
+
+
+def _tool_names(calls: list[object]) -> list[str]:
+    names: list[str] = []
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        if call.get("event") != "tool_call_start":
+            continue
+        name = call.get("tool_name")
+        if name is not None:
+            names.append(str(name))
+    return names
+
+
+def _react_stage_summary(stage_name: str, calls: list[dict[str, Any]]) -> dict[str, Any]:
+    if stage_name == "thought":
+        starts = [call for call in calls if call.get("event") == "model_call_start"]
+        ends = [call for call in calls if call.get("event") == "model_call_end"]
+        last_request = starts[-1].get("request") if starts else {}
+        last_response = ends[-1].get("response") if ends else {}
+        message_count = 0
+        tool_count = 0
+        if isinstance(last_request, dict):
+            messages = last_request.get("messages")
+            tools = last_request.get("tools")
+            message_count = len(messages) if isinstance(messages, list) else 0
+            tool_count = len(tools) if isinstance(tools, list) else 0
+        return {
+            "model_calls": len(starts),
+            "message_count": message_count,
+            "available_tools": tool_count,
+            "response_types": _response_block_types(last_response),
+        }
+
+    tool_starts = [call for call in calls if call.get("event") == "tool_call_start"]
+    return {
+        "tool_calls": len(tool_starts),
+        "tool_names": _tool_names(calls),
+        "errors": _count_error_calls(calls),
+    }
+
+
+def _trace_event_summary(call: dict[str, Any]) -> dict[str, Any]:
+    event_name = str(call.get("event", "event"))
+    if event_name == "model_call_start":
+        request = call.get("request")
+        messages = request.get("messages") if isinstance(request, dict) else []
+        tools = request.get("tools") if isinstance(request, dict) else []
+        return {
+            "messages": len(messages) if isinstance(messages, list) else 0,
+            "tools": len(tools) if isinstance(tools, list) else 0,
+        }
+    if event_name == "model_call_end":
+        return {"response_types": _response_block_types(call.get("response"))}
+    if event_name == "tool_call_start":
+        return {
+            "tool": call.get("tool_name"),
+            "args": _request_args_preview(call.get("request")),
+        }
+    if event_name in {"tool_call_end", "tool_call_error"}:
+        return {
+            "tool": call.get("tool_name"),
+            "response": _response_preview(call.get("response")),
+        }
+    fields = call.get("fields")
+    return {
+        "event": event_name,
+        "turn_id": fields.get("turn_id") if isinstance(fields, dict) else None,
+    }
+
+
+def _request_args_preview(request: object) -> object:
+    if isinstance(request, dict):
+        args = request.get("args")
+        if isinstance(args, dict):
+            return args
+    return None
+
+
+def _response_preview(response: object) -> object:
+    if not isinstance(response, dict):
+        return None
+    content = response.get("content")
+    if isinstance(content, str):
+        return _preview(content, fallback="empty response", limit=160)
+    return _preview(json.dumps(json_safe(response), ensure_ascii=False), fallback="empty response", limit=160)
+
+
+def _response_block_types(response: object) -> list[str]:
+    if isinstance(response, list):
+        types: list[str] = []
+        for item in response:
+            if isinstance(item, dict):
+                block_types = item.get("content_block_types")
+                if isinstance(block_types, list):
+                    types.extend(str(block_type) for block_type in block_types)
+        return types
+    if isinstance(response, dict):
+        block_types = response.get("content_block_types")
+        if isinstance(block_types, list):
+            return [str(block_type) for block_type in block_types]
+    return []
 
 
 def turn_for_event(

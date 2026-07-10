@@ -36,6 +36,15 @@ def test_domain_prompt_positions_agent_for_air_ticket_fact_explanations():
     assert "能力调用 ID" not in DOMAIN_PROMPT
 
 
+def test_core_prompt_defines_react_guard_and_ledger_semantics():
+    assert "context_observation_ledger" in CORE_PROMPT
+    assert "duplicate_blocked" in CORE_PROMPT
+    assert "react_loop_stop_requested" in CORE_PROMPT
+    assert "stop_requested=true" in CORE_PROMPT
+    assert "立即停止工具调用" in CORE_PROMPT
+    assert "基于已有事实回答" in CORE_PROMPT
+
+
 def test_tool_layer_is_generated_from_registered_tools():
     tool_prompt = build_tool_prompt(get_tools())
 
@@ -70,8 +79,11 @@ def test_system_prompt_combines_layers():
 
 def test_context_budget_prompts_live_in_prompt_package():
     class FakeLedger:
+        def to_model_text(self) -> str:
+            return "- 已完成 generic_lookup，参数：{\"slot\":1}；结果：共 2 条记录。"
+
         def to_prompt_text(self) -> str:
-            return '{"observation_count": 1}'
+            return '{"observation_count":1,"result_shape":{"type":"object"}}'
 
     assert CONTEXT_LEDGER_TOOL_NAME == "context_observation_ledger"
     tool_args = build_context_ledger_tool_call_args(
@@ -90,17 +102,18 @@ def test_context_budget_prompts_live_in_prompt_package():
         },
     )
 
-    assert tool_args["reason"] == "context_budget_compaction"
-    assert tool_args["latest_user_goal"] == "请汇总"
+    assert tool_args == {}
     assert "这是历史工具观察，不是最终回答指令" in prompt
     assert "必要时仍可调用可用工具" in prompt
-    assert "工具观察账本" in prompt
-    assert "protected task state" in prompt
-    assert "todo_snapshot" in prompt
+    assert "已完成 generic_lookup" in prompt
+    assert "任务进度" in prompt
     assert "汇总报价" in prompt
-    assert "in_progress" in prompt
-    assert '{"observation_count": 1}' in prompt
-    assert "原请求估算 100 chars" in prompt
+    assert "进行中" in prompt
+    assert "observation_count" not in prompt
+    assert "result_shape" not in prompt
+    assert "todo_snapshot" not in prompt
+    assert "estimate_chars" not in prompt
+    assert "原请求估算" not in prompt
 
 
 def test_middleware_prompt_addenda_live_in_prompt_package():
