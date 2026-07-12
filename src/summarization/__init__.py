@@ -8,6 +8,10 @@ from src.summarization.context_compaction import (
 )
 from src.summarization.context_pipeline import build_context_pipeline_request
 from src.summarization.model import build_summary_model
+from src.summarization.semantic_cache import (
+    SemanticSummaryCache,
+    semantic_summary_cache_key,
+)
 from src.summarization.layered_context import (
     CompactLayeredContextState,
     build_layered_context_state,
@@ -35,6 +39,7 @@ __all__ = [
     "CompactObservationLedger",
     "ContextCompactionResult",
     "LayerOneProjection",
+    "SemanticSummaryCache",
     "ToolObservation",
     "ToolSummaryCandidate",
     "build_context_compaction_request",
@@ -52,4 +57,5 @@ __all__ = [
     "json_shape_summary",
     "json_stats_summary",
     "partition_messages_for_compaction",
+    "semantic_summary_cache_key",
 ]

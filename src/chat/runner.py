@@ -777,13 +777,18 @@ def execution_step_summaries(calls: list[dict[str, Any]]) -> list[dict[str, Any]
                 if next_call.get("event") in {
                     "context_summary_end",
                     "context_summary_error",
+                    "context_summary_unavailable",
                 }:
                     summary_calls.append(next_call)
                     index += 1
             steps.append(_context_summary_step(summary_calls))
             index += 1
             continue
-        if event in {"context_summary_end", "context_summary_error"}:
+        if event in {
+            "context_summary_end",
+            "context_summary_error",
+            "context_summary_unavailable",
+        }:
             steps.append(_context_summary_step([call]))
             index += 1
             continue
@@ -926,6 +931,15 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
                     "still_over_budget": fields.get("still_over_budget"),
                     "compaction_level": fields.get("compaction_level"),
                     "semantic_skip_reason": fields.get("semantic_skip_reason"),
+                    "semantic_summary_unavailable": fields.get(
+                        "semantic_summary_unavailable"
+                    ),
+                    "semantic_unavailable_reason": fields.get(
+                        "semantic_unavailable_reason"
+                    ),
+                    "semantic_fallback_used": fields.get(
+                        "semantic_fallback_used"
+                    ),
                     "compaction_mode": fields.get("compaction_mode"),
                     "compacted_message_count": fields.get("compacted_message_count"),
                     "compacted_tool_count": fields.get("compacted_tool_count"),
@@ -962,6 +976,13 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
             "still_over_budget": fields.get("still_over_budget"),
             "compaction_level": fields.get("compaction_level"),
             "semantic_skip_reason": fields.get("semantic_skip_reason"),
+            "semantic_summary_unavailable": fields.get(
+                "semantic_summary_unavailable"
+            ),
+            "semantic_unavailable_reason": fields.get(
+                "semantic_unavailable_reason"
+            ),
+            "semantic_fallback_used": fields.get("semantic_fallback_used"),
             "compaction_mode": fields.get("compaction_mode"),
             "compacted_message_count": fields.get("compacted_message_count"),
             "compacted_tool_count": fields.get("compacted_tool_count"),
@@ -984,9 +1005,12 @@ def _context_summary_step(calls: list[dict[str, Any]]) -> dict[str, Any]:
         else {}
     )
     details = {**start_fields, **end_fields}
+    details = _context_summary_content_details(details)
     last_event = str(last_call.get("event") or "")
     if last_event == "context_summary_error":
         status = "error"
+    elif last_event == "context_summary_unavailable":
+        status = "completed"
     elif last_event == "context_summary_end":
         status = "completed"
     else:
@@ -997,8 +1021,17 @@ def _context_summary_step(calls: list[dict[str, Any]]) -> dict[str, Any]:
         "local_semantic_summary": "历史上下文摘要",
         "global_fallback_summary": "全局兜底摘要",
     }.get(stage, "上下文摘要")
-    if status == "completed":
-        summary = f"摘要完成，用时 {details.get('duration_ms', 0)} ms。"
+    if last_event == "context_summary_unavailable":
+        summary = (
+            "摘要模型未生成可用的最终摘要；本进程已停用语义摘要，"
+            "系统将使用确定性压缩结果继续执行。"
+        )
+    elif status == "completed":
+        output_chars = details.get("output_chars")
+        summary = (
+            f"摘要完成，用时 {details.get('duration_ms', 0)} ms"
+            + (f"，生成 {output_chars} chars。" if output_chars is not None else "。")
+        )
     elif status == "error":
         summary = (
             f"摘要失败：{details.get('error_type') or '未知错误'}；"
@@ -1028,6 +1061,24 @@ def _context_summary_step(calls: list[dict[str, Any]]) -> dict[str, Any]:
             }
         ],
     }
+
+
+def _context_summary_content_details(details: dict[str, Any]) -> dict[str, Any]:
+    content = details.get("summary_content")
+    if not isinstance(content, str) or not content.strip():
+        content = details.get("output_preview")
+    if not isinstance(content, str) or not content.strip():
+        return details
+
+    content = content.strip()
+    updated = dict(details)
+    updated["summary_content"] = content
+    updated["summary_content_chars"] = len(content)
+    updated.pop("facts", None)
+    updated.pop("open_items", None)
+    updated.pop("evidence_refs", None)
+    updated.pop("omissions", None)
+    return updated
 
 
 def _context_compaction_state_details(fields: dict[str, Any]) -> dict[str, Any]:

@@ -32,6 +32,11 @@ model = ChatOpenAI(
     max_retries=settings.llm.max_retries,
 )
 summary_model = build_summary_model(settings.llm, settings.summarization)
+summary_cache_max_items = (
+    settings.summarization.cache_max_items
+    if settings.summarization.cache_enabled
+    else 0
+)
 
 tools = get_tools()
 checkpointer = build_checkpointer(settings.memory.checkpointer)
@@ -44,6 +49,7 @@ middleware = [
         context_window_tokens=settings.llm.context_window_tokens,
         summary_model=summary_model,
         semantic_enabled=settings.summarization.enabled,
+        summary_cache_max_items=summary_cache_max_items,
     ),
     build_observability_middleware(redact=settings.observability.logging.redact),
     build_param_aware_duplicate_tool_call_guard(loop_stop_after=3),

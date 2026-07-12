@@ -128,38 +128,31 @@ def _render_semantic_summaries(
     if not summaries:
         return ""
 
-    facts: list[str] = []
-    open_items: list[str] = []
-    notices: list[str] = []
+    content_sections: list[str] = []
     for summary in summaries:
-        facts.extend(_string_items(summary.get("facts")))
-        open_items.extend(_string_items(summary.get("open_items")))
-        notice = summary.get("dropped_detail_notice")
-        if isinstance(notice, str) and notice.strip():
-            notices.append(notice.strip())
+        content = _semantic_summary_content(summary)
+        if content:
+            content_sections.append(content)
 
-    sections: list[str] = []
-    if facts:
-        sections.append("### 历史结论\n" + "\n".join(f"- {fact}" for fact in facts))
-    if open_items:
-        sections.append(
-            "### 尚待处理\n" + "\n".join(f"- {item}" for item in open_items)
-        )
-    if notices:
-        sections.append(
-            "### 信息边界\n" + "\n".join(f"- {notice}" for notice in notices)
-        )
-    return "\n\n".join(sections) + ("\n\n" if sections else "")
+    if not content_sections:
+        return ""
+    return (
+        "### 历史摘要\n"
+        + "\n\n".join(content_sections)
+        + "\n\n"
+    )
 
 
-def _string_items(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [
-        item.strip()
-        for item in value
-        if isinstance(item, str) and item.strip()
-    ]
+def _semantic_summary_content(summary: dict[str, Any]) -> str:
+    content = summary.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+
+    text = summary.get("summary")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
+    return ""
 
 
 def build_context_compaction_user_prompt(
@@ -180,7 +173,7 @@ def build_context_compaction_user_prompt(
         estimate_chars=estimate_chars,
         threshold_chars=threshold_chars,
         todo_snapshot=todo_snapshot,
-        local_semantic_summaries=localff_semantic_summaries,
+        local_semantic_summaries=local_semantic_summaries,
         global_fallback_summary=global_fallback_summary,
         include_deterministic_ledger=include_deterministic_ledger,
     )

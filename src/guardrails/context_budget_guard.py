@@ -17,6 +17,8 @@ from src.summarization.context_compaction import (
 )
 from src.summarization.context_pipeline import build_context_pipeline_request
 from src.summarization.layered_context import has_compressible_history
+from src.summarization.semantic_cache import SemanticSummaryCache
+from src.summarization.structured_output import SemanticSummaryCapability
 
 
 DEFAULT_MAX_FRACTION = 0.85
@@ -44,6 +46,7 @@ class ContextBudgetGuard(AgentMiddleware):
         max_tool_facts: int | None = None,
         summary_model: Any | None = None,
         semantic_enabled: bool = True,
+        summary_cache_max_items: int = 256,
     ) -> None:
         self.context_window_tokens = context_window_tokens
         self.max_fraction = max_fraction
@@ -54,6 +57,8 @@ class ContextBudgetGuard(AgentMiddleware):
         self.max_tool_facts = max_tool_facts
         self.summary_model = summary_model
         self.semantic_enabled = semantic_enabled
+        self.summary_capability = SemanticSummaryCapability()
+        self.summary_cache = SemanticSummaryCache(max_items=summary_cache_max_items)
 
     def wrap_model_call(
         self,
@@ -101,6 +106,8 @@ class ContextBudgetGuard(AgentMiddleware):
             estimate_request_chars=_request_size_estimate,
             semantic_enabled=self.semantic_enabled,
             summary_model=self.summary_model,
+            summary_capability=self.summary_capability,
+            summary_cache=self.summary_cache,
             summary_event_callback=lambda event, fields: log_event(
                 event,
                 context=_request_context(request),
@@ -232,6 +239,9 @@ def _log_context_budget_compacted(
         semantic_skip_reason=compaction_result.semantic_skip_reason,
         semantic_error_stage=compaction_result.semantic_error_stage,
         semantic_error_type=compaction_result.semantic_error_type,
+        semantic_summary_unavailable=compaction_result.semantic_summary_unavailable,
+        semantic_unavailable_reason=compaction_result.semantic_unavailable_reason,
+        semantic_fallback_used=compaction_result.semantic_fallback_used,
         global_fallback_used=compaction_result.global_fallback_used,
         deterministic_ledger_included=compaction_result.deterministic_ledger_included,
         post_compaction_chars=compaction_result.post_compaction_chars,

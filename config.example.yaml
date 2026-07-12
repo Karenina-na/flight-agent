@@ -29,11 +29,14 @@ observability:
 
 summarization:
   enabled: true
+  # Use a dedicated non-reasoning model name when the main model only emits
+  # internal reasoning for structured-output requests.
   model: "main"
   timeout_seconds: 45
-  max_output_tokens: 768
   max_retries: 0
   reasoning_enabled: false
+  cache_enabled: true
+  cache_max_items: 256
   trigger:
     type: "fraction"
     value: 0.55

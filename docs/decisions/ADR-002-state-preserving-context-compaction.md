@@ -151,6 +151,17 @@ size, no retries by default, a short timeout, and disables model thinking when
 the configured chat template supports `enable_thinking`. These controls keep an
 internal summary from consuming the full agent turn while repeating reasoning.
 
+Structured-output support is treated as a runtime capability. Summary calls
+request JSON Schema output and retain the raw response for diagnostics. If the
+model returns only reasoning, an empty visible result, or omits required schema
+fields, the shared summary capability is marked unavailable for the current
+process. The current request falls back to deterministic compaction, and later
+requests skip L3-L5 semantic model calls instead of repeating the same timeout.
+Trace events distinguish this `context_summary_unavailable` fallback from a
+transient `context_summary_error`. A dedicated non-reasoning
+`summarization.model` is recommended when the main agent model cannot produce
+visible structured output.
+
 Todo is protected state. It is not included in L3-L5 summary inputs. The final
 context ledger still receives the bounded todo snapshot so status and ordering
 survive.

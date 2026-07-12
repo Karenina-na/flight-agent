@@ -648,12 +648,8 @@ def test_context_budget_guard_compacts_web_41e6d813_like_request():
     assert "不要编造未提供的工具结果" in compact_prompt
     assert "dropped_observation_count" not in compact_prompt
     assert "2026-07-10" in compact_prompt
-    assert "2026-07-20" not in compact_prompt
+    assert "2026-07-20" in compact_prompt
     assert isinstance(compact_request.messages[0], HumanMessage)
-    assert any(
-        "2026-07-20" in str(getattr(message, "content", ""))
-        for message in compact_request.messages
-    )
     assert any(
         str(getattr(message, "content", "")) == "请你查询后一个月每一天的机票，并做一个汇总表格"
         for message in compact_request.messages
@@ -728,7 +724,13 @@ def test_context_budget_guard_keeps_human_query_before_synthetic_ledger():
     guard.wrap_model_call(request, handler)
 
     compact_request = seen_requests[0]
-    assert [message.type for message in compact_request.messages] == ["human", "ai", "tool"]
+    assert [message.type for message in compact_request.messages] == [
+        "human",
+        "ai",
+        "tool",
+        "ai",
+        "tool",
+    ]
     assert compact_request.messages[0].content == "执行复杂批量查询并汇总"
     _ledger_messages(compact_request.messages)
 
@@ -851,14 +853,10 @@ def test_context_budget_guard_preserves_tool_observations_after_layer1_trimming(
         str(getattr(message, "content", "")) for message in compact_request.messages
     )
     assert "search_airfare_quotes" in compact_prompt
-    assert any(
-        getattr(message, "tool_call_id", "") == "call-2"
-        for message in compact_request.messages
-    )
     assert "2026-07-08" in compact_prompt
-    assert "2026-07-09" in compact_request_text
+    assert "2026-07-09" in compact_prompt
     assert "旧推理应在压缩视图中裁剪" not in compact_prompt
-    assert "第二段旧推理也应裁剪" in compact_request_text
+    assert "第二段旧推理也应裁剪" not in compact_request_text
     assert "function_call" not in compact_prompt
 
 
@@ -925,15 +923,13 @@ def test_context_budget_guard_compacts_old_turns_without_duplicating_raw_suffix(
     guard.wrap_model_call(request, handler)
 
     compact_request = seen_requests[0]
-    assert [message.type for message in compact_request.messages] == ["human", "ai", "human", "ai", "tool"]
+    assert [message.type for message in compact_request.messages] == ["human", "ai", "tool"]
     _, tool_message = _ledger_messages(compact_request.messages)
     compact_prompt = tool_message.content
     assert '{"slot":"old"}' in compact_prompt
     assert "第一轮：查询北京到上海" in compact_prompt
-    assert "raw-suffix-marker" not in compact_prompt
-    assert compact_request.messages[0].content == "第二轮：保留这个最近 turn 原文"
-    assert compact_request.messages[1].content == "第二轮 assistant 原文：raw-suffix-marker"
-    assert compact_request.messages[2].content == "第三轮：最新问题"
+    assert "raw-suffix-marker" in compact_prompt
+    assert compact_request.messages[0].content == "第三轮：最新问题"
 
 
 def test_context_budget_guard_uses_runtime_user_goal_when_latest_human_is_summary():

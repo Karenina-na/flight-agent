@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
 from time import perf_counter
 from typing import Any
 
 from src.prompt.tool_summary import build_tool_result_summary_messages
-from src.summarization.response_content import visible_response_text
+from src.summarization.semantic_cache import SemanticSummaryCache
+from src.summarization.structured_output import (
+    SemanticSummaryCapability,
+    SemanticSummaryUnavailableError,
+    invoke_semantic_summary_text_with_cache,
+)
 from src.summarization.tool_observation import json_stats_summary
 
 
@@ -97,20 +100,17 @@ def summarize_tool_candidates(
     candidates: list[ToolSummaryCandidate],
     *,
     max_chunk_chars: int = DEFAULT_TOOL_SUMMARY_CHUNK_CHARS,
+    summary_capability: SemanticSummaryCapability | None = None,
+    summary_cache: SemanticSummaryCache | None = None,
     event_callback: SummaryEventCallback | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Summarize complete tool-result chunks and merge grounded facts."""
+    """Summarize complete tool-result chunks as plain model-readable content."""
     summaries: dict[str, dict[str, Any]] = {}
     for candidate in candidates:
         if not candidate.tool_call_id:
             continue
         chunks = chunk_tool_result(candidate.content, max_chars=max_chunk_chars)
-        facts: list[str] = []
-        omissions: list[str] = []
-        grounding_text = (
-            candidate.content
-            + json.dumps(candidate.result_stats, ensure_ascii=False, default=str)
-        )
+        chunk_summaries: list[str] = []
         for index, chunk in enumerate(chunks, start=1):
             started_at = perf_counter()
             _emit_summary_event(
@@ -124,7 +124,8 @@ def summarize_tool_candidates(
                 input_chars=len(chunk),
             )
             try:
-                response = summary_model.invoke(
+                summary_result = invoke_semantic_summary_text_with_cache(
+                    summary_model,
                     build_tool_result_summary_messages(
                         tool_name=candidate.tool_name,
                         args=candidate.args,
@@ -132,10 +133,27 @@ def summarize_tool_candidates(
                         result_stats=candidate.result_stats,
                         chunk_index=index,
                         chunk_count=len(chunks),
-                    )
+                    ),
+                    capability=summary_capability,
+                    cache=summary_cache,
                 )
-                response_text = visible_response_text(response)
-                parsed = _parse_summary_response(response)
+                summary_text = summary_result.text
+            except SemanticSummaryUnavailableError as exc:
+                _emit_summary_event(
+                    event_callback,
+                    "context_summary_unavailable",
+                    stage="l3_tool_semantic",
+                    tool_name=candidate.tool_name,
+                    tool_call_id=candidate.tool_call_id,
+                    chunk_index=index,
+                    chunk_count=len(chunks),
+                    status="unavailable",
+                    duration_ms=_duration_ms(started_at),
+                    reason=exc.reason,
+                    cached=exc.cached,
+                    fallback="deterministic_compaction",
+                )
+                raise
             except Exception as exc:
                 _emit_summary_event(
                     event_callback,
@@ -160,20 +178,14 @@ def summarize_tool_candidates(
                 chunk_count=len(chunks),
                 status="success",
                 duration_ms=_duration_ms(started_at),
-                output_chars=len(response_text),
+                output_chars=len(summary_text),
+                summary_content=summary_text,
+                cached=summary_result.cached,
+                cache_key=summary_result.cache_key,
             )
-            facts.extend(
-                fact
-                for fact in parsed["facts"]
-                if _numbers_are_grounded(fact, grounding_text)
-            )
-            omissions.extend(parsed["omissions"])
-        grounded_facts = _unique_strings(facts)
-        if not grounded_facts:
-            raise ValueError("tool semantic summary contains no grounded facts")
+            chunk_summaries.append(summary_text)
         summaries[candidate.tool_call_id] = {
-            "facts": grounded_facts,
-            "omissions": _unique_strings(omissions),
+            "content": "\n\n".join(_unique_strings(chunk_summaries)),
         }
     return summaries
 
@@ -282,43 +294,6 @@ def _parse_json(content: str) -> Any | None:
         return json.loads(content)
     except json.JSONDecodeError:
         return None
-
-
-def _parse_summary_response(response: Any) -> dict[str, list[str]]:
-    parsed = json.loads(visible_response_text(response))
-    if not isinstance(parsed, dict):
-        raise ValueError("tool semantic summary must be a JSON object")
-    facts = parsed.get("facts")
-    omissions = parsed.get("omissions")
-    if not isinstance(facts, list) or not isinstance(omissions, list):
-        raise ValueError("tool semantic summary missing facts or omissions")
-    return {
-        "facts": _string_items(facts),
-        "omissions": _string_items(omissions),
-    }
-
-
-def _numbers_are_grounded(text: str, source: str) -> bool:
-    source_numbers = _numeric_tokens(source)
-    return _numeric_tokens(text).issubset(source_numbers)
-
-
-def _numeric_tokens(text: str) -> set[Decimal]:
-    tokens: set[Decimal] = set()
-    for match in re.findall(r"(?<![\d.])[-+]?\d+(?:\.\d+)?(?![\d.])", text):
-        try:
-            tokens.add(Decimal(match))
-        except InvalidOperation:
-            continue
-    return tokens
-
-
-def _string_items(value: list[Any]) -> list[str]:
-    return [
-        item.strip()
-        for item in value
-        if isinstance(item, str) and item.strip()
-    ]
 
 
 def _unique_strings(values: list[str]) -> list[str]:

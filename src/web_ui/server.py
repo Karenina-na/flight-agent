@@ -1130,7 +1130,7 @@ INDEX_HTML = r"""<!doctype html>
           ${summary ? `<p class="execution-stage-summary">${escapeHtml(summary)}</p>` : ""}
           ${renderStageFlow(stage)}
           <details>
-            <summary>查看结构化详情</summary>
+            <summary>查看执行详情</summary>
             <pre><code>${escapeHtml(details)}</code></pre>
           </details>
         </div>
@@ -1166,7 +1166,16 @@ INDEX_HTML = r"""<!doctype html>
           <div class="execution-stage-flow">
             ${renderStageRow("压缩后大小", `${formatNumber(details.compacted_state_chars)} chars`)}
             ${renderStageRow("展示大小", `${formatNumber(details.compacted_state_preview_chars)} chars`)}
-            ${renderStageRow("内容摘要", formatCompactedStatePreview(details.compacted_state_preview))}
+            ${renderStageRow("压缩内容", formatCompactedStatePreview(details.compacted_state_preview))}
+          </div>
+        `;
+      }
+      if (stage.kind === "context_summary") {
+        return `
+          <div class="execution-stage-flow">
+            ${renderStageRow("输入大小", `${formatNumber(details.input_chars)} chars`)}
+            ${renderStageRow("输出大小", `${formatNumber(details.output_chars || details.summary_content_chars)} chars`)}
+            ${renderStageRow("摘要内容", formatCompactedStatePreview(details.summary_content || details.output_preview))}
           </div>
         `;
       }

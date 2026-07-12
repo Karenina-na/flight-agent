@@ -140,7 +140,7 @@ def test_has_compressible_history_requires_more_than_latest_user_message():
     )
 
 
-def test_partition_messages_for_compaction_keeps_recent_human_turns_raw():
+def test_partition_messages_for_compaction_keeps_only_latest_goal_raw():
     messages = [
         HumanMessage(content="第一轮"),
         AIMessage(content="第一轮回答"),
@@ -152,5 +152,113 @@ def test_partition_messages_for_compaction_keeps_recent_human_turns_raw():
 
     prefix, raw_suffix = partition_messages_for_compaction(messages, raw_recent_turns=2)
 
-    assert [message.content for message in prefix] == ["第一轮", "第一轮回答", '{"ok":true}']
-    assert [message.content for message in raw_suffix] == ["第二轮", "第二轮回答", "第三轮"]
+    assert [message.content for message in prefix] == [
+        "第一轮",
+        "第一轮回答",
+        '{"ok":true}',
+        "第二轮",
+        "第二轮回答",
+    ]
+    assert [message.content for message in raw_suffix] == ["第三轮"]
+
+
+def test_partition_messages_for_compaction_keeps_active_tool_tail_raw():
+    messages = [
+        HumanMessage(content="旧问题"),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-old",
+                    "name": "search_airfare_quotes",
+                    "args": {"departure_date": "2026-07-15"},
+                }
+            ],
+        ),
+        ToolMessage(
+            content='{"quotes":[{"price":400}]}',
+            name="search_airfare_quotes",
+            tool_call_id="call-old",
+        ),
+        AIMessage(content="旧回答"),
+        HumanMessage(content="最新问题"),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-active",
+                    "name": "search_airfare_quotes",
+                    "args": {"departure_date": "2026-07-18"},
+                }
+            ],
+        ),
+        ToolMessage(
+            content='{"quotes":[{"price":500}]}',
+            name="search_airfare_quotes",
+            tool_call_id="call-active",
+        ),
+    ]
+
+    prefix, raw_suffix = partition_messages_for_compaction(messages, raw_recent_turns=2)
+
+    assert [message.content for message in prefix] == [
+        "旧问题",
+        "",
+        '{"quotes":[{"price":400}]}',
+        "旧回答",
+    ]
+    assert [message.content for message in raw_suffix] == [
+        "最新问题",
+        "",
+        '{"quotes":[{"price":500}]}',
+    ]
+
+
+def test_partition_messages_for_compaction_compresses_consumed_current_steps():
+    messages = [
+        HumanMessage(content="最新问题"),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-consumed",
+                    "name": "search_airfare_quotes",
+                    "args": {"departure_date": "2026-07-17"},
+                }
+            ],
+        ),
+        ToolMessage(
+            content='{"quotes":[{"price":400}]}',
+            name="search_airfare_quotes",
+            tool_call_id="call-consumed",
+        ),
+        AIMessage(content="已读取 17 日结果，继续查 18 日"),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-active",
+                    "name": "search_airfare_quotes",
+                    "args": {"departure_date": "2026-07-18"},
+                }
+            ],
+        ),
+        ToolMessage(
+            content='{"quotes":[{"price":500}]}',
+            name="search_airfare_quotes",
+            tool_call_id="call-active",
+        ),
+    ]
+
+    prefix, raw_suffix = partition_messages_for_compaction(messages, raw_recent_turns=2)
+
+    assert [message.content for message in prefix] == [
+        "",
+        '{"quotes":[{"price":400}]}',
+        "已读取 17 日结果，继续查 18 日",
+    ]
+    assert [message.content for message in raw_suffix] == [
+        "最新问题",
+        "",
+        '{"quotes":[{"price":500}]}',
+    ]

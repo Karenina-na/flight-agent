@@ -6,7 +6,9 @@ from langchain.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
 from src.prompt import CONTEXT_LEDGER_TOOL_NAME
+from src.summarization.semantic_cache import SemanticSummaryCache
 from src.summarization.context_pipeline import build_context_pipeline_request
+from src.summarization.structured_output import SemanticSummaryCapability
 
 
 class FakeSummaryModel:
@@ -19,7 +21,7 @@ class FakeSummaryModel:
         self.calls.append(messages)
         if self.raises:
             raise RuntimeError("summary failed")
-        content = self.responses.pop(0) if self.responses else '{"facts":["摘要事实"],"open_items":[],"evidence_refs":[]}'
+        content = self.responses.pop(0) if self.responses else "摘要事实：保留历史上下文。"
         return AIMessage(content=content)
 
 
@@ -220,7 +222,7 @@ def test_pipeline_preserves_full_tool_result_before_l3_summary_when_budget_allow
 
 def test_pipeline_uses_l4_local_semantic_summary_when_l1_l3_still_over_budget():
     summary_model = FakeSummaryModel(
-        ['{"facts":["保留局部事实"],"open_items":["继续汇总"],"evidence_refs":["tool_call:call-1"]}']
+        ["保留局部事实；仍需继续汇总。"]
     )
     request = _request(
         messages=[
@@ -251,17 +253,133 @@ def test_pipeline_uses_l4_local_semantic_summary_when_l1_l3_still_over_budget():
     assert result.semantic_skip_reason is None
     assert len(summary_model.calls) == 1
     content = _ledger_content(result.request.messages)
-    assert "### 历史结论" in content
+    assert "### 历史摘要" in content
     assert "保留局部事实" in content
     assert "local_semantic_summary" not in content
     assert "evidence_refs" not in content
 
 
+def test_pipeline_invokes_l4_summary_model_directly_without_schema():
+    class SummaryModel:
+        def __init__(self):
+            self.calls = []
+
+        def invoke(self, messages):
+            self.calls.append(messages)
+            return AIMessage(content="保留局部事实；继续汇总。")
+
+    summary_model = SummaryModel()
+    request = _request(
+        messages=[
+            HumanMessage(content="查询第一批"),
+            _tool_message('{"records":[{"amount":1}]}', "call-1"),
+            HumanMessage(content="现在汇总"),
+        ]
+    )
+    estimates = iter([3000, 1000])
+
+    result = build_context_pipeline_request(
+        request,
+        latest_human_text="现在汇总",
+        estimate_chars=5000,
+        threshold_chars=2000,
+        ledger_fraction=0.25,
+        min_ledger_budget_chars=12000,
+        raw_recent_turns=1,
+        estimate_request_chars=lambda request: next(estimates),
+        semantic_enabled=True,
+        summary_model=summary_model,
+    )
+
+    assert result is not None
+    assert result.compaction_level == "l4_local_semantic"
+    assert len(summary_model.calls) == 1
+    prompt_text = "\n".join(message["content"] for message in summary_model.calls[0])
+    assert "输出 JSON schema" not in prompt_text
+    assert "直接输出摘要正文" in prompt_text
+
+
+def test_pipeline_disables_repeated_semantic_calls_after_reasoning_only_output():
+    class ReasoningOnlySummaryModel:
+        def __init__(self):
+            self.calls = []
+
+        def invoke(self, messages):
+            self.calls.append(messages)
+            return AIMessage(
+                content=[
+                    {
+                        "type": "reasoning",
+                        "content": [
+                            {
+                                "type": "reasoning_text",
+                                "text": "只生成推理，没有最终摘要。",
+                            }
+                        ],
+                    }
+                ]
+            )
+
+    large_result = json.dumps(
+        {
+            "records": [{"id": "A", "amount": 700}],
+            "padding": "x" * 1600,
+        }
+    )
+    request = _request(
+        messages=[
+            HumanMessage(content="汇总工具结果"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "name": "lookup",
+                        "args": {"scope": "all"},
+                    }
+                ],
+            ),
+            _tool_message(large_result),
+        ]
+    )
+    model = ReasoningOnlySummaryModel()
+    capability = SemanticSummaryCapability()
+
+    def compact_once():
+        estimates = iter([1500, 2500])
+        return build_context_pipeline_request(
+            request,
+            latest_human_text="汇总工具结果",
+            estimate_chars=5000,
+            threshold_chars=2000,
+            ledger_fraction=0.25,
+            min_ledger_budget_chars=12000,
+            raw_recent_turns=1,
+            estimate_request_chars=lambda _request: next(estimates),
+            semantic_enabled=True,
+            summary_model=model,
+            summary_capability=capability,
+        )
+
+    first_result = compact_once()
+    second_result = compact_once()
+
+    assert first_result is not None
+    assert second_result is not None
+    assert len(model.calls) == 1
+    assert first_result.semantic_summary_unavailable is True
+    assert second_result.semantic_summary_unavailable is True
+    assert first_result.semantic_unavailable_reason == "reasoning_only_output"
+    assert second_result.semantic_unavailable_reason == "reasoning_only_output"
+    assert first_result.semantic_skip_reason == "semantic_unavailable"
+    assert second_result.semantic_skip_reason == "semantic_unavailable"
+
+
 def test_pipeline_uses_l5_global_fallback_when_l4_still_over_budget():
     summary_model = FakeSummaryModel(
         [
-            '{"facts":["局部事实"],"open_items":[],"evidence_refs":["message:0"]}',
-            '{"facts":["全局事实"],"open_items":["待继续"],"evidence_refs":["summary:local"],"dropped_detail_notice":"细节已丢弃"}',
+            "局部事实。",
+            "全局事实；待继续处理。",
         ]
     )
     request = _request(
@@ -301,8 +419,8 @@ def test_pipeline_uses_l5_global_fallback_when_l4_still_over_budget():
 def test_l5_global_fallback_omits_deterministic_ledger_details():
     summary_model = FakeSummaryModel(
         [
-            '{"facts":["局部事实"],"open_items":[],"evidence_refs":["message:0"]}',
-            '{"facts":["只保留全局事实"],"open_items":[],"evidence_refs":["summary:local"],"dropped_detail_notice":"明细已降级"}',
+            "局部事实。",
+            "只保留全局事实。",
         ]
     )
     request = _request(
@@ -367,8 +485,8 @@ def test_pipeline_falls_back_to_l1_l3_when_summary_model_fails():
     assert "local_semantic_summary" not in _ledger_content(result.request.messages)
 
 
-def test_pipeline_emits_summary_error_when_semantic_schema_is_invalid():
-    summary_model = FakeSummaryModel(['{"facts":["局部事实"]}'])
+def test_pipeline_accepts_non_schema_summary_text_content():
+    summary_model = FakeSummaryModel(["局部事实。"])
     events: list[tuple[str, dict]] = []
     request = _request(
         messages=[
@@ -377,6 +495,7 @@ def test_pipeline_emits_summary_error_when_semantic_schema_is_invalid():
             HumanMessage(content="现在汇总"),
         ]
     )
+    estimates = iter([3000, 1000])
 
     result = build_context_pipeline_request(
         request,
@@ -386,25 +505,133 @@ def test_pipeline_emits_summary_error_when_semantic_schema_is_invalid():
         ledger_fraction=0.25,
         min_ledger_budget_chars=12000,
         raw_recent_turns=1,
-        estimate_request_chars=lambda request: 3000,
+        estimate_request_chars=lambda request: next(estimates),
         semantic_enabled=True,
         summary_model=summary_model,
         summary_event_callback=lambda event, fields: events.append((event, fields)),
     )
 
     assert result is not None
-    assert result.semantic_summary_failed is True
+    assert result.semantic_summary_failed is False
+    assert result.semantic_summary_unavailable is False
+    assert result.compaction_level == "l4_local_semantic"
     assert [event for event, _ in events] == [
         "context_summary_start",
-        "context_summary_error",
+        "context_summary_end",
     ]
     assert events[-1][1]["stage"] == "local_semantic_summary"
-    assert events[-1][1]["error_type"] == "ValueError"
+    assert events[-1][1]["summary_content"] == "局部事实。"
+
+
+def test_pipeline_reuses_cached_l4_summary_for_same_compacted_context():
+    summary_model = FakeSummaryModel(["局部事实 1。", "局部事实 2。"])
+    cache = SemanticSummaryCache(max_items=16)
+    request = _request(
+        messages=[
+            HumanMessage(content="查询第一批"),
+            _tool_message('{"records":[{"amount":1}]}', "call-1"),
+            HumanMessage(content="现在汇总"),
+        ]
+    )
+    events: list[tuple[str, dict]] = []
+
+    def compact_once():
+        estimates = iter([3000, 1000])
+        return build_context_pipeline_request(
+            request,
+            latest_human_text="现在汇总",
+            estimate_chars=5000,
+            threshold_chars=2000,
+            ledger_fraction=0.25,
+            min_ledger_budget_chars=12000,
+            raw_recent_turns=1,
+            estimate_request_chars=lambda _request: next(estimates),
+            semantic_enabled=True,
+            summary_model=summary_model,
+            summary_cache=cache,
+            summary_event_callback=lambda event, fields: events.append((event, fields)),
+        )
+
+    first = compact_once()
+    second = compact_once()
+
+    assert first is not None
+    assert second is not None
+    assert len(summary_model.calls) == 1
+    assert "局部事实 1。" in _ledger_content(first.request.messages)
+    assert "局部事实 1。" in _ledger_content(second.request.messages)
+    end_events = [
+        fields
+        for event, fields in events
+        if event == "context_summary_end"
+    ]
+    assert [fields["cached"] for fields in end_events] == [False, True]
+    assert end_events[0]["cache_key"] == end_events[1]["cache_key"]
+
+
+def test_pipeline_reuses_cached_l5_summary_for_same_compacted_context():
+    summary_model = FakeSummaryModel(
+        [
+            "局部事实。",
+            "全局事实 1。",
+            "不应生成的新局部事实。",
+            "全局事实 2。",
+        ]
+    )
+    cache = SemanticSummaryCache(max_items=16)
+    request = _request(
+        messages=[
+            HumanMessage(content="查询第一批"),
+            _tool_message('{"records":[{"amount":1}]}', "call-1"),
+            HumanMessage(content="现在汇总"),
+        ]
+    )
+    events: list[tuple[str, dict]] = []
+
+    def compact_once():
+        estimates = iter([3000, 2800, 1000])
+        return build_context_pipeline_request(
+            request,
+            latest_human_text="现在汇总",
+            estimate_chars=5000,
+            threshold_chars=2000,
+            ledger_fraction=0.25,
+            min_ledger_budget_chars=12000,
+            raw_recent_turns=1,
+            estimate_request_chars=lambda _request: next(estimates),
+            semantic_enabled=True,
+            summary_model=summary_model,
+            summary_cache=cache,
+            summary_event_callback=lambda event, fields: events.append((event, fields)),
+        )
+
+    first = compact_once()
+    second = compact_once()
+
+    assert first is not None
+    assert second is not None
+    assert first.compaction_level == "l5_global_fallback"
+    assert second.compaction_level == "l5_global_fallback"
+    assert len(summary_model.calls) == 2
+    assert "全局事实 1。" in _ledger_content(first.request.messages)
+    assert "全局事实 1。" in _ledger_content(second.request.messages)
+    assert "全局事实 2。" not in _ledger_content(second.request.messages)
+    end_events = [
+        fields
+        for event, fields in events
+        if event == "context_summary_end"
+    ]
+    assert [fields["cached"] for fields in end_events] == [
+        False,
+        False,
+        True,
+        True,
+    ]
 
 
 def test_pipeline_preserves_todo_snapshot_outside_semantic_summary_input():
     summary_model = FakeSummaryModel(
-        ['{"facts":["局部事实"],"open_items":[],"evidence_refs":["message:0"]}']
+        ["局部事实。"]
     )
     request = _request(
         messages=[

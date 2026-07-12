@@ -75,9 +75,10 @@ air_ticket:
     assert settings.summarization.keep.value == 20
     assert settings.summarization.trim_tokens_to_summarize == 4000
     assert settings.summarization.timeout_seconds == 45
-    assert settings.summarization.max_output_tokens == 768
     assert settings.summarization.max_retries == 0
     assert settings.summarization.reasoning_enabled is False
+    assert settings.summarization.cache_enabled is True
+    assert settings.summarization.cache_max_items == 256
     assert settings.memory.checkpointer.type == "in_memory"
     assert settings.memory.store.enabled is True
     assert settings.memory.store.type == "in_memory"
@@ -121,9 +122,10 @@ def test_load_settings_falls_back_to_example_config(tmp_path: Path):
     assert settings.summarization.keep.value == 0.35
     assert settings.summarization.trim_tokens_to_summarize == 3000
     assert settings.summarization.timeout_seconds == 45
-    assert settings.summarization.max_output_tokens == 768
     assert settings.summarization.max_retries == 0
     assert settings.summarization.reasoning_enabled is False
+    assert settings.summarization.cache_enabled is True
+    assert settings.summarization.cache_max_items == 256
     assert settings.air_ticket.provider == "mock"
     assert settings.air_ticket.flyclaw.external_path == "external/FlyClaw"
     assert settings.air_ticket.flyclaw.timeout_seconds == 20

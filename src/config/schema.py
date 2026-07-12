@@ -73,9 +73,10 @@ class SummarizationSettings:
     keep: WindowClauseSettings
     trim_tokens_to_summarize: int | None
     timeout_seconds: int = 45
-    max_output_tokens: int = 768
     max_retries: int = 0
     reasoning_enabled: bool = False
+    cache_enabled: bool = True
+    cache_max_items: int = 256
 
 
 @dataclass(frozen=True)

@@ -69,6 +69,10 @@ class ContextCompactionResult:
     semantic_skip_reason: str | None = None
     semantic_error_stage: str | None = None
     semantic_error_type: str | None = None
+    semantic_summary_unavailable: bool = False
+    semantic_unavailable_reason: str | None = None
+    semantic_fallback_used: bool = False
+    active_tool_call_ids: set[str] | None = None
 
 
 def build_context_compaction_request(
@@ -86,20 +90,22 @@ def build_context_compaction_request(
         request.messages,
         raw_recent_turns=raw_recent_turns,
     )
-    if not compressed_messages:
+    active_tool_call_ids = _active_tool_call_ids(raw_messages)
+    active_tool_messages = _active_tool_messages(raw_messages)
+    if not compressed_messages and not active_tool_messages:
         return None
 
     projection = project_layer_one_messages(compressed_messages)
     tool_call_messages = [
         message
-        for message in compressed_messages
+        for message in [*compressed_messages, *raw_messages]
         if getattr(message, "tool_calls", None)
     ]
     tool_semantic_candidates = build_tool_summary_candidates(
-        [*tool_call_messages, *projection.messages]
+        [*tool_call_messages, *projection.messages, *active_tool_messages]
     )
     layered_state = build_layered_context_state(
-        projection.messages,
+        [*projection.messages, *active_tool_messages],
         budget_chars=max(
             round(threshold_chars * ledger_fraction),
             min_ledger_budget_chars,
@@ -130,6 +136,7 @@ def build_context_compaction_request(
         layer_one_projection=projection,
         todo_snapshot=todo_snapshot,
         tool_semantic_candidates=tool_semantic_candidates,
+        active_tool_call_ids=active_tool_call_ids,
         raw_messages=recent_messages,
         synthetic_message_builder=lambda *,
         ledger_override=None,
@@ -222,15 +229,44 @@ def recent_messages_with_current_goal(
     """Ensure the transient compacted view keeps the latest user goal visible."""
     if not current_user_goal:
         return raw_messages
-    if any(
-        str(getattr(message, "type", "")) == "human"
-        and str(getattr(message, "content", "")) == current_user_goal
-        for message in raw_messages
-    ):
+    replaced: list[Any] = []
+    replaced_human = False
+    for message in raw_messages:
+        if str(getattr(message, "type", "")) != "human":
+            replaced.append(message)
+            continue
+        replaced.append(HumanMessage(content=current_user_goal))
+        replaced_human = True
+    if replaced_human:
+        return replaced
+    return [HumanMessage(content=current_user_goal), *raw_messages]
+
+
+def replace_active_tool_messages(
+    raw_messages: list[Any],
+    replacements_by_tool_call_id: dict[str, str],
+) -> list[Any]:
+    """Replace active ToolMessage content while preserving tool-call protocol."""
+    if not replacements_by_tool_call_id:
         return raw_messages
-    if len(raw_messages) == 1 and str(getattr(raw_messages[0], "type", "")) == "human":
-        return [HumanMessage(content=current_user_goal)]
-    return [*raw_messages, HumanMessage(content=current_user_goal)]
+    replaced: list[Any] = []
+    for message in raw_messages:
+        if str(getattr(message, "type", "")) != "tool":
+            replaced.append(message)
+            continue
+        tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+        replacement = replacements_by_tool_call_id.get(tool_call_id)
+        if replacement is None:
+            replaced.append(message)
+            continue
+        replaced.append(
+            ToolMessage(
+                content=replacement,
+                name=str(getattr(message, "name", "") or "tool"),
+                tool_call_id=tool_call_id,
+            )
+        )
+    return replaced
 
 
 def project_layer_one_messages(messages: list[Any]) -> LayerOneProjection:
@@ -388,6 +424,30 @@ def _content_text(content: Any) -> str:
         return json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
     except TypeError:
         return str(content)
+
+
+def _active_tool_call_ids(raw_messages: list[Any]) -> set[str]:
+    ids: set[str] = set()
+    for message in raw_messages:
+        for tool_call in getattr(message, "tool_calls", None) or []:
+            if not isinstance(tool_call, dict):
+                continue
+            tool_call_id = str(tool_call.get("id") or "")
+            if tool_call_id:
+                ids.add(tool_call_id)
+    return ids
+
+
+def _active_tool_messages(raw_messages: list[Any]) -> list[Any]:
+    active_ids = _active_tool_call_ids(raw_messages)
+    if not active_ids:
+        return []
+    return [
+        message
+        for message in raw_messages
+        if str(getattr(message, "type", "")) == "tool"
+        and str(getattr(message, "tool_call_id", "") or "") in active_ids
+    ]
 
 
 def synthetic_ledger_messages(

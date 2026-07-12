@@ -19,6 +19,7 @@ def build_agent_state_compaction_middleware(
     context_window_tokens: int,
     summary_model: Any | None = None,
     semantic_enabled: bool = True,
+    summary_cache_max_items: int = 256,
     max_fraction: float = DEFAULT_MAX_FRACTION,
 ) -> AgentStateCompactionMiddleware:
     """Build agent-state compaction middleware."""
@@ -26,6 +27,7 @@ def build_agent_state_compaction_middleware(
         context_window_tokens=context_window_tokens,
         summary_model=summary_model,
         semantic_enabled=semantic_enabled,
+        summary_cache_max_items=summary_cache_max_items,
         max_fraction=max_fraction,
     )
 

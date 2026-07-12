@@ -11,10 +11,16 @@ from typing import Any, Literal
 from langchain.agents.middleware import ModelRequest
 
 from src.prompt.context_summary import SummaryKind, build_semantic_summary_messages
-from src.summarization.response_content import visible_response_text
 from src.summarization.context_compaction import (
     ContextCompactionResult,
     build_context_compaction_request,
+    replace_active_tool_messages,
+)
+from src.summarization.semantic_cache import SemanticSummaryCache
+from src.summarization.structured_output import (
+    SemanticSummaryCapability,
+    SemanticSummaryUnavailableError,
+    invoke_semantic_summary_text_with_cache,
 )
 from src.summarization.tool_semantic import (
     SummaryEventCallback,
@@ -75,9 +81,12 @@ def build_context_pipeline_request(
     estimate_request_chars: Callable[[ModelRequest], int],
     semantic_enabled: bool,
     summary_model: Any | None,
+    summary_capability: SemanticSummaryCapability | None = None,
+    summary_cache: SemanticSummaryCache | None = None,
     summary_event_callback: SummaryEventCallback | None = None,
 ) -> ContextCompactionResult | None:
     """Build a compacted request using deterministic L1-L2 and semantic L3-L5."""
+    capability = summary_capability or SemanticSummaryCapability()
     base_result = _deterministic_compaction_result(
         request,
         latest_human_text=latest_human_text,
@@ -123,11 +132,18 @@ def build_context_pipeline_request(
                 semantic_skip_reason="within_budget_with_lossless_tool_results",
             )
 
-    if candidates and semantic_enabled and summary_model is not None:
+    if (
+        candidates
+        and semantic_enabled
+        and summary_model is not None
+        and capability.available
+    ):
         try:
             tool_summaries = summarize_tool_candidates(
                 summary_model,
                 candidates,
+                summary_capability=capability,
+                summary_cache=summary_cache,
                 event_callback=summary_event_callback,
             )
             if tool_summaries:
@@ -141,6 +157,11 @@ def build_context_pipeline_request(
                     post_compaction_chars=l3_chars,
                     still_over_budget=l3_chars > threshold_chars,
                 )
+        except SemanticSummaryUnavailableError as exc:
+            working_result = _with_semantic_unavailable(
+                base_result,
+                reason=exc.reason,
+            )
         except Exception as exc:
             working_result = replace(
                 base_result,
@@ -150,6 +171,11 @@ def build_context_pipeline_request(
                 semantic_error_stage="l3_tool_semantic",
                 semantic_error_type=type(exc).__name__,
             )
+    elif candidates and semantic_enabled and summary_model is not None:
+        working_result = _with_semantic_unavailable(
+            base_result,
+            reason=capability.reason or "semantic_summary_unavailable",
+        )
 
     if working_result.post_compaction_chars <= threshold_chars:
         if working_result.compaction_level == "l3_tool_semantic":
@@ -160,11 +186,18 @@ def build_context_pipeline_request(
             return replace(working_result, semantic_skip_reason="missing_summary_model")
         if working_result.tool_semantic_summary_failed:
             return working_result
+        if working_result.semantic_summary_unavailable:
+            return working_result
         return replace(working_result, semantic_skip_reason="within_budget_after_l1_l3")
     if not semantic_enabled:
         return replace(working_result, semantic_skip_reason="semantic_disabled")
     if summary_model is None:
         return replace(working_result, semantic_skip_reason="missing_summary_model")
+    if not capability.available:
+        return _with_semantic_unavailable(
+            working_result,
+            reason=capability.reason or "semantic_summary_unavailable",
+        )
 
     try:
         local_summary = _call_summary_model(
@@ -172,6 +205,8 @@ def build_context_pipeline_request(
             kind="local_semantic_summary",
             latest_user_goal=latest_human_text,
             bounded_context=_bounded_context(working_result),
+            summary_capability=capability,
+            summary_cache=summary_cache,
             event_callback=summary_event_callback,
         )
         l4_result = _with_semantic_summaries(
@@ -195,6 +230,8 @@ def build_context_pipeline_request(
             kind="global_fallback_summary",
             latest_user_goal=latest_human_text,
             bounded_context=_bounded_context(l4_result),
+            summary_capability=capability,
+            summary_cache=summary_cache,
             event_callback=summary_event_callback,
         )
         l5_result = _with_semantic_summaries(
@@ -209,6 +246,11 @@ def build_context_pipeline_request(
             l5_result,
             post_compaction_chars=l5_chars,
             still_over_budget=l5_chars > threshold_chars,
+        )
+    except SemanticSummaryUnavailableError as exc:
+        return _with_semantic_unavailable(
+            working_result,
+            reason=exc.reason,
         )
     except Exception as exc:
         return replace(
@@ -252,7 +294,7 @@ def _with_semantic_summaries(
     include_deterministic_ledger = compaction_level != "l5_global_fallback"
     compact_request = result.request.override(
         messages=[
-            *result.raw_messages,
+            *_raw_messages_with_active_replacements(result, {}),
             *result.synthetic_message_builder(
                 ledger_override=result.ledger,
                 local_semantic_summaries=local_semantic_summaries,
@@ -287,9 +329,13 @@ def _with_tool_semantic_summaries(
         args_by_tool_call_id=candidate_args,
     )
     semantic_ledger = replace(result.ledger, tool_observation_ledger=tool_ledger)
+    replacements = _active_tool_replacements(
+        result,
+        summaries_by_tool_call_id=summaries_by_tool_call_id,
+    )
     compact_request = result.request.override(
         messages=[
-            *result.raw_messages,
+            *_raw_messages_with_active_replacements(result, replacements),
             *result.synthetic_message_builder(
                 ledger_override=semantic_ledger,
                 local_semantic_summaries=[],
@@ -337,9 +383,13 @@ def _with_lossless_tool_results(
         names_by_tool_call_id=names_by_tool_call_id,
     )
     lossless_ledger = replace(result.ledger, tool_observation_ledger=tool_ledger)
+    replacements = _active_tool_replacements(
+        result,
+        lossless_results_by_tool_call_id=results_by_tool_call_id,
+    )
     compact_request = result.request.override(
         messages=[
-            *result.raw_messages,
+            *_raw_messages_with_active_replacements(result, replacements),
             *result.synthetic_message_builder(
                 ledger_override=lossless_ledger,
                 local_semantic_summaries=[],
@@ -358,12 +408,62 @@ def _with_lossless_tool_results(
     )
 
 
+def _raw_messages_with_active_replacements(
+    result: ContextCompactionResult,
+    replacements_by_tool_call_id: dict[str, str],
+) -> list[Any]:
+    return replace_active_tool_messages(
+        result.raw_messages or [],
+        replacements_by_tool_call_id,
+    )
+
+
+def _active_tool_replacements(
+    result: ContextCompactionResult,
+    *,
+    summaries_by_tool_call_id: dict[str, dict[str, Any]] | None = None,
+    lossless_results_by_tool_call_id: dict[str, str] | None = None,
+) -> dict[str, str]:
+    active_ids = result.active_tool_call_ids or set()
+    replacements: dict[str, str] = {}
+    for tool_call_id in active_ids:
+        if lossless_results_by_tool_call_id and tool_call_id in lossless_results_by_tool_call_id:
+            replacements[tool_call_id] = lossless_results_by_tool_call_id[tool_call_id]
+            continue
+        summary = (summaries_by_tool_call_id or {}).get(tool_call_id)
+        if isinstance(summary, dict):
+            content = summary.get("content")
+            if isinstance(content, str) and content.strip():
+                replacements[tool_call_id] = content.strip()
+    return replacements
+
+
+def _with_semantic_unavailable(
+    result: ContextCompactionResult,
+    *,
+    reason: str,
+) -> ContextCompactionResult:
+    return replace(
+        result,
+        semantic_summary_failed=False,
+        tool_semantic_summary_failed=False,
+        semantic_summary_unavailable=True,
+        semantic_unavailable_reason=reason,
+        semantic_fallback_used=True,
+        semantic_skip_reason="semantic_unavailable",
+        semantic_error_stage=None,
+        semantic_error_type=None,
+    )
+
+
 def _call_summary_model(
     summary_model: Any,
     *,
     kind: SummaryKind,
     latest_user_goal: str,
     bounded_context: dict[str, Any],
+    summary_capability: SemanticSummaryCapability | None = None,
+    summary_cache: SemanticSummaryCache | None = None,
     event_callback: SummaryEventCallback | None = None,
 ) -> dict[str, Any]:
     started_at = perf_counter()
@@ -377,27 +477,33 @@ def _call_summary_model(
         input_chars=input_chars,
     )
     try:
-        response = summary_model.invoke(
+        summary_result = invoke_semantic_summary_text_with_cache(
+            summary_model,
             build_semantic_summary_messages(
                 kind=kind,
                 latest_user_goal=latest_user_goal,
                 bounded_context=bounded_context,
-            )
+            ),
+            capability=summary_capability,
+            cache=summary_cache,
         )
-        response_text = visible_response_text(response)
-        parsed = json.loads(response_text)
-        if not isinstance(parsed, dict):
-            raise ValueError("semantic summary must be a JSON object")
-        facts = parsed.get("facts")
-        open_items = parsed.get("open_items")
-        evidence_refs = parsed.get("evidence_refs")
-        if (
-            not isinstance(facts, list)
-            or not isinstance(open_items, list)
-            or not isinstance(evidence_refs, list)
-        ):
-            raise ValueError("semantic summary missing required list fields")
-        parsed["type"] = kind
+        summary_text = summary_result.text
+        parsed = {
+            "type": kind,
+            "content": summary_text,
+        }
+    except SemanticSummaryUnavailableError as exc:
+        _emit_summary_event(
+            event_callback,
+            "context_summary_unavailable",
+            stage=kind,
+            status="unavailable",
+            duration_ms=_duration_ms(started_at),
+            reason=exc.reason,
+            cached=exc.cached,
+            fallback="deterministic_compaction",
+        )
+        raise
     except Exception as exc:
         _emit_summary_event(
             event_callback,
@@ -414,7 +520,10 @@ def _call_summary_model(
         stage=kind,
         status="success",
         duration_ms=_duration_ms(started_at),
-        output_chars=len(response_text),
+        output_chars=len(summary_text),
+        summary_content=summary_text,
+        cached=summary_result.cached,
+        cache_key=summary_result.cache_key,
     )
     return parsed
 

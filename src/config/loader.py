@@ -100,11 +100,6 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
                 "timeout_seconds",
                 45,
             ),
-            max_output_tokens=_get_int_with_default(
-                summarization_config,
-                "max_output_tokens",
-                768,
-            ),
             max_retries=_get_int_with_default(
                 summarization_config,
                 "max_retries",
@@ -114,6 +109,16 @@ def load_settings(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Settings:
                 summarization_config,
                 "reasoning_enabled",
                 False,
+            ),
+            cache_enabled=_get_bool_with_default(
+                summarization_config,
+                "cache_enabled",
+                True,
+            ),
+            cache_max_items=_get_int_with_default(
+                summarization_config,
+                "cache_max_items",
+                256,
             ),
         ),
         air_ticket=AirTicketSettings(

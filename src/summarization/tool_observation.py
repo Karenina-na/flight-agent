@@ -411,6 +411,8 @@ def _model_result_text(observation: dict[str, Any]) -> str:
         semantic_text = _semantic_summary_text(semantic_summary)
         if semantic_text:
             return semantic_text
+    if isinstance(semantic_summary, str) and semantic_summary.strip():
+        return semantic_summary.strip()
 
     stats_text = _model_stats_text(observation.get("result_stats"))
     preview_truncated = bool(observation.get("result_preview_truncated"))
@@ -455,6 +457,14 @@ def _model_stats_text(stats: Any) -> str:
 
 
 def _semantic_summary_text(summary: dict[str, Any]) -> str:
+    content = summary.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+
+    text = summary.get("summary")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
     facts = [
         item.strip()
         for item in summary.get("facts", [])

@@ -168,6 +168,9 @@ Conversation summarization is configured in YAML:
 summarization:
   enabled: true
   model: "main"
+  timeout_seconds: 45
+  max_retries: 0
+  reasoning_enabled: false
   trigger:
     type: "fraction"
     value: 0.55
@@ -183,6 +186,15 @@ local model contexts. The default `keep.fraction: 0.35` preserves the most recen
 portion by token budget rather than by message count, which is important when
 tool results are large. Because fractional limits need a known context window,
 set `llm.context_window_tokens` for the selected model.
+
+L3-L5 semantic compression requires the configured summary model to return a
+visible structured result. Some local reasoning models may spend most of their
+generation on internal reasoning and fail to return complete JSON. When this is
+detected, the process marks semantic summarization unavailable and immediately
+uses the deterministic compression result for later requests instead of
+repeating the slow failing call. Configure `summarization.model` with a
+dedicated non-reasoning model when the main model has this behavior. Restarting
+the process resets the capability check.
 
 ## Run
 

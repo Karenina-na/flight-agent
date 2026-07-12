@@ -525,6 +525,49 @@ def test_execution_step_summaries_exposes_context_summary_lifecycle():
     assert steps[0]["stages"][0]["details"]["duration_ms"] == 1820
 
 
+def test_execution_step_summaries_exposes_semantic_summary_fallback():
+    calls = [
+        {
+            "index": 1,
+            "type": "event",
+            "event": "context_summary_start",
+            "fields": {
+                "stage": "l3_tool_semantic",
+                "tool_name": "search_airfare_quotes",
+                "tool_call_id": "call-1",
+                "input_chars": 2354,
+            },
+        },
+        {
+            "index": 2,
+            "type": "event",
+            "event": "context_summary_unavailable",
+            "fields": {
+                "stage": "l3_tool_semantic",
+                "tool_name": "search_airfare_quotes",
+                "tool_call_id": "call-1",
+                "status": "unavailable",
+                "duration_ms": 20162,
+                "reason": "reasoning_only_output",
+                "cached": False,
+                "fallback": "deterministic_compaction",
+            },
+        },
+    ]
+
+    steps = execution_step_summaries(calls)
+
+    assert len(steps) == 1
+    assert steps[0]["kind"] == "context_summary"
+    assert steps[0]["title"] == "工具结果语义压缩"
+    assert steps[0]["status"] == "completed"
+    assert "未生成可用的最终摘要" in steps[0]["summary"]
+    assert "确定性压缩结果" in steps[0]["summary"]
+    assert steps[0]["stages"][0]["details"]["reason"] == (
+        "reasoning_only_output"
+    )
+
+
 def test_execution_step_summaries_exposes_model_text_and_requested_tools():
     calls = [
         {

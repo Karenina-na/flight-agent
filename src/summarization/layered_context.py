@@ -256,24 +256,31 @@ def partition_messages_for_compaction(
     *,
     raw_recent_turns: int = 2,
 ) -> tuple[list[Any], list[Any]]:
-    """Split messages into a compressed prefix and raw recent human turns."""
-    starts = _human_message_indexes(messages)
-    if len(starts) <= 1:
-        latest_human_index = starts[-1] if starts else None
-        if latest_human_index is None:
-            return list(messages), []
-        compressed = [
-            message
-            for index, message in enumerate(messages)
-            if index != latest_human_index
-        ]
-        return compressed, [messages[latest_human_index]]
-    if raw_recent_turns <= 0:
+    """Split messages into compressible history and the live ReAct protocol tail.
+
+    Compression must not keep previous complete turns raw: doing so can re-inject
+    stale tool calls and old user goals into later model requests. The raw suffix
+    is therefore limited to the latest user goal plus the latest unconsumed
+    assistant tool-call sequence, if one exists.
+    """
+    _ = raw_recent_turns
+    latest_human_index = _latest_human_index(messages)
+    if latest_human_index is None:
         return list(messages), []
-    if len(starts) <= raw_recent_turns:
-        return [], list(messages)
-    raw_start = starts[-raw_recent_turns]
-    return list(messages[:raw_start]), list(messages[raw_start:])
+
+    active_tail_indexes = _active_tool_tail_indexes(messages, latest_human_index)
+    raw_indexes = {latest_human_index, *active_tail_indexes}
+    compressed = [
+        message
+        for index, message in enumerate(messages)
+        if index not in raw_indexes
+    ]
+    raw_suffix = [
+        message
+        for index, message in enumerate(messages)
+        if index in raw_indexes
+    ]
+    return compressed, raw_suffix
 
 
 def _state_from_cards(
@@ -348,6 +355,28 @@ def _human_message_indexes(messages: list[Any]) -> list[int]:
         for index, message in enumerate(messages)
         if str(getattr(message, "type", "")) == "human"
     ]
+
+
+def _active_tool_tail_indexes(messages: list[Any], latest_human_index: int) -> list[int]:
+    for index in range(len(messages) - 1, latest_human_index, -1):
+        if _has_tool_calls(messages[index]):
+            if _is_consumed_by_later_assistant(messages, index):
+                return []
+            return list(range(index, len(messages)))
+    return []
+
+
+def _has_tool_calls(message: Any) -> bool:
+    return str(getattr(message, "type", "")) == "ai" and bool(
+        getattr(message, "tool_calls", None)
+    )
+
+
+def _is_consumed_by_later_assistant(messages: list[Any], tool_call_index: int) -> bool:
+    return any(
+        str(getattr(message, "type", "")) == "ai"
+        for message in messages[tool_call_index + 1 :]
+    )
 
 
 def _visible_content_text(content: Any) -> str:
