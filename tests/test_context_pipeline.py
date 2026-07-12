@@ -390,6 +390,7 @@ def test_pipeline_uses_l5_global_fallback_when_l4_still_over_budget():
         ]
     )
     estimates = iter([3000, 2800, 1000])
+    events: list[tuple[str, dict]] = []
 
     result = build_context_pipeline_request(
         request,
@@ -402,6 +403,7 @@ def test_pipeline_uses_l5_global_fallback_when_l4_still_over_budget():
         estimate_request_chars=lambda request: next(estimates),
         semantic_enabled=True,
         summary_model=summary_model,
+        summary_event_callback=lambda event, fields: events.append((event, fields)),
     )
 
     assert result is not None
@@ -414,6 +416,14 @@ def test_pipeline_uses_l5_global_fallback_when_l4_still_over_budget():
     assert "较早的逐条工具结果已因上下文预算折叠" in content
     assert "global_fallback_summary" not in content
     assert "deterministic_history_omitted" not in content
+    assert [(event, fields.get("stage"), fields.get("layer")) for event, fields in events] == [
+        ("context_summary_start", "local_semantic_summary", None),
+        ("context_summary_end", "local_semantic_summary", None),
+        ("context_compaction_layer", None, "L4"),
+        ("context_summary_start", "global_fallback_summary", None),
+        ("context_summary_end", "global_fallback_summary", None),
+        ("context_compaction_layer", None, "L5"),
+    ]
 
 
 def test_l5_global_fallback_omits_deterministic_ledger_details():
@@ -518,9 +528,11 @@ def test_pipeline_accepts_non_schema_summary_text_content():
     assert [event for event, _ in events] == [
         "context_summary_start",
         "context_summary_end",
+        "context_compaction_layer",
     ]
-    assert events[-1][1]["stage"] == "local_semantic_summary"
-    assert events[-1][1]["summary_content"] == "局部事实。"
+    assert events[1][1]["stage"] == "local_semantic_summary"
+    assert events[1][1]["summary_content"] == "局部事实。"
+    assert events[2][1]["layer"] == "L4"
 
 
 def test_pipeline_reuses_cached_l4_summary_for_same_compacted_context():

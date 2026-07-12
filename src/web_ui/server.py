@@ -21,7 +21,7 @@ from src.tools import get_tools
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7860
 DEMO_MESSAGE = (
-    "请查询北京到上海在 2026-07-10 的机票报价样本，"
+    "请查询明天上海到北京的机票，"
     "并说明查到的事实、信息出处、查询时间和数据限制。"
 )
 
@@ -521,6 +521,34 @@ INDEX_HTML = r"""<!doctype html>
       display: grid;
       gap: 10px;
     }
+    .context-compaction-panel {
+      min-height: 52px;
+      max-height: 420px;
+      resize: vertical;
+      overflow: auto;
+      background: #fbfaff;
+      border: 1px solid #ddd6fe;
+      border-left: 3px solid #7c3aed;
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .context-compaction-panel > summary {
+      cursor: pointer;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      list-style: none;
+      color: #5b21b6;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .context-compaction-panel > summary::-webkit-details-marker { display: none; }
+    .context-compaction-body {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
     .execution-title {
       font-size: 12px;
       color: var(--muted);
@@ -574,6 +602,11 @@ INDEX_HTML = r"""<!doctype html>
     }
     .execution-step[data-kind="react_step"] {
       border-left: 3px solid var(--accent);
+    }
+    .execution-step[data-kind="context_compaction"],
+    .execution-step[data-kind="context_compaction_layer"],
+    .execution-step[data-kind="context_summary"] {
+      border-left: 3px solid #7c3aed;
     }
     .execution-step-body {
       padding: 0 10px 10px 28px;
@@ -837,7 +870,7 @@ INDEX_HTML = r"""<!doctype html>
       </header>
       <div id="messages"></div>
       <form id="chatForm">
-        <textarea id="input" placeholder="例如：查询明天北京到上海的机票有哪些"></textarea>
+        <textarea id="input" placeholder="例如：查询明天上海到北京的机票有哪些"></textarea>
         <button class="primary" id="sendBtn" type="submit">发送</button>
       </form>
     </main>
@@ -897,17 +930,12 @@ INDEX_HTML = r"""<!doctype html>
     const toolSuccessCountEl = document.querySelector("#toolSuccessCount");
     const toolErrorCountEl = document.querySelector("#toolErrorCount");
     const debugWarningsEl = document.querySelector("#debugWarnings");
-    const DEMO_PROMPT = "请查询北京到上海在 2026-07-10 的机票报价样本，并说明查到的事实、信息出处、查询时间和数据限制。";
+    const DEMO_PROMPT = "请查询明天上海到北京的机票，并说明查到的事实、信息出处、查询时间和数据限制。";
     const COMPRESSION_STRESS_PROMPT = [
-      "请执行一个会触发 16K 上下文压力的复杂机票事实任务：",
-      "1. 以 2026-07-10 为第一天，连续查询接下来 12 天的北京到上海机票报价样本。",
-      "2. 每一天都需要分别查询北京到上海、上海到北京、北京到广州、广州到北京这 4 条航线。",
-      "3. 每次查询都保留出发地、目的地、日期、报价条数、最低价、最高价、出处、查询时间和 limitations。",
-      "4. 查询过程中如果某天或某条航线返回空结果，也要记录为空结果，不要跳过。",
-      "5. 最后汇总一份报告：按日期分组列出每条航线的报价事实，说明哪些工具调用成功、哪些结果为空、哪些信息不足。",
-      "6. 如果上下文被压缩，请继续基于已完成的工具观察账本推进，不要误称已经成功调用过的日期没有查询。",
-      "7. 不要做价格合理性、违规、审计通过等判断，只说明事实、出处、时间和限制。",
-      "请尽可能完整执行，不要只给计划。",
+      "请查询明天、后天、大后天上海到北京的机票。",
+      "请分别获取三个日期的票价事实，汇总每一天的报价样本、最低价、最高价、信息出处、查询时间和数据限制。",
+      "最后请根据已查询到的价格样本给出购买建议，例如哪一天更适合买、是否建议尽快下单、哪些信息仍不足。",
+      "不要做违规、审计通过或报销结论，只基于当前可见报价样本说明建议。",
     ].join("\\n");
     let isSending = false;
     let currentMessages = [];
@@ -1085,33 +1113,70 @@ INDEX_HTML = r"""<!doctype html>
     function renderExecutionSteps(steps) {
       const items = Array.isArray(steps) ? steps : [];
       if (!items.length) return "";
-      const renderedSteps = items.map((step, index) => {
-        const title = step.title || `执行步骤 ${index + 1}`;
-        const status = step.status || "info";
-        const kind = step.kind || "step";
-        const summary = step.summary || "";
-        const stages = Array.isArray(step.stages) ? step.stages : [];
-        const body = stages.length
-          ? stages.map((stage) => renderReactStage(stage)).join("")
-          : renderLegacyExecutionDetails(step);
-        return `
-          <details class="execution-step" data-kind="${escapeHtml(kind)}">
-            <summary>
-              <span class="execution-step-title">${escapeHtml(index + 1)}. ${escapeHtml(title)}</span>
-              <span class="execution-step-status">${escapeHtml(status)}</span>
-            </summary>
-            <div class="execution-step-body">
-              ${summary ? `<p class="execution-step-summary">${escapeHtml(summary)}</p>` : ""}
-              ${body}
-            </div>
-          </details>
-        `;
+      const renderedItems = items.map((step, index) => {
+        if (isContextCompactionStep(step)) {
+          return renderContextCompactionPanel(step, index);
+        }
+        return renderExecutionStepCard(step, index);
       }).join("");
       return `
         <div class="execution-steps">
           <div class="execution-title">执行过程</div>
-          ${renderedSteps}
+          ${renderedItems}
         </div>
+      `;
+    }
+
+    function isContextCompactionStep(step) {
+      const kind = step && step.kind ? String(step.kind) : "";
+      const group = step && step.group ? String(step.group) : "";
+      return group === "context_compaction"
+        || kind === "context_compaction"
+        || kind === "context_compaction_layer"
+        || kind === "context_compaction_group"
+        || kind === "context_summary";
+    }
+
+    function renderContextCompactionPanel(step, index) {
+      const childSteps = Array.isArray(step.steps) ? step.steps : [step];
+      const renderedSteps = childSteps.map((child, childIndex) => renderExecutionStepCard(child, childIndex)).join("");
+      const title = step.title || `上下文压缩 ${index + 1}`;
+      const status = step.status || "info";
+      const summary = step.summary || "";
+      return `
+        <details class="context-compaction-panel" data-kind="${escapeHtml(step.kind || "context_compaction")}" open>
+          <summary>
+            <span>${escapeHtml(index + 1)}. 上下文压缩：${escapeHtml(title)}</span>
+            <span>${escapeHtml(status)} · ${formatNumber(childSteps.length)} 个阶段</span>
+          </summary>
+          <div class="context-compaction-body">
+            ${summary ? `<p class="execution-step-summary">${escapeHtml(summary)}</p>` : ""}
+            ${renderedSteps}
+          </div>
+        </details>
+      `;
+    }
+
+    function renderExecutionStepCard(step, index) {
+      const title = step.title || `执行步骤 ${index + 1}`;
+      const status = step.status || "info";
+      const kind = step.kind || "step";
+      const summary = step.summary || "";
+      const stages = Array.isArray(step.stages) ? step.stages : [];
+      const body = stages.length
+        ? stages.map((stage) => renderReactStage(stage)).join("")
+        : renderLegacyExecutionDetails(step);
+      return `
+        <details class="execution-step" data-kind="${escapeHtml(kind)}">
+          <summary>
+            <span class="execution-step-title">${escapeHtml(index + 1)}. ${escapeHtml(title)}</span>
+            <span class="execution-step-status">${escapeHtml(status)}</span>
+          </summary>
+          <div class="execution-step-body">
+            ${summary ? `<p class="execution-step-summary">${escapeHtml(summary)}</p>` : ""}
+            ${body}
+          </div>
+        </details>
       `;
     }
 
@@ -1167,6 +1232,26 @@ INDEX_HTML = r"""<!doctype html>
             ${renderStageRow("压缩后大小", `${formatNumber(details.compacted_state_chars)} chars`)}
             ${renderStageRow("展示大小", `${formatNumber(details.compacted_state_preview_chars)} chars`)}
             ${renderStageRow("压缩内容", formatCompactedStatePreview(details.compacted_state_preview))}
+          </div>
+        `;
+      }
+      if (stage.kind === "context_compaction_layer") {
+        return `
+          <div class="execution-stage-flow">
+            ${renderStageRow("层级", `<code>${escapeHtml(details.layer || "L?")}</code>`)}
+            ${renderStageRow("状态", escapeHtml(statusText(details.status || stage.status)))}
+            ${renderStageRow("压缩前", `${formatNumber(details.estimate_chars)} chars`)}
+            ${renderStageRow("触发阈值", `${formatNumber(details.threshold_chars)} chars`)}
+          </div>
+        `;
+      }
+      if (stage.kind === "context_compaction") {
+        return `
+          <div class="execution-stage-flow">
+            ${renderStageRow("压缩层级", `<code>${escapeHtml(details.compaction_level_label || details.compaction_level || "unknown")}</code>`)}
+            ${renderStageRow("压缩前", `${formatNumber(details.estimate_chars)} chars`)}
+            ${renderStageRow("触发阈值", `${formatNumber(details.threshold_chars)} chars`)}
+            ${renderStageRow("压缩后请求", `${formatNumber(details.post_compaction_chars || details.final_model_request_chars)} chars`)}
           </div>
         `;
       }

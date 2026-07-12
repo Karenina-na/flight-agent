@@ -36,17 +36,17 @@ assembly live in the summarization layer.
 
 When the request approaches the configured context budget, the agent now:
 
-1. Splits the message history on user-turn boundaries.
+1. Splits the message history into a compressible prefix and a protected live
+   suffix.
 2. Compresses older turns through the `summarization` context pipeline.
 3. Injects that state as a protocol-valid synthetic tool observation.
 4. Preserves the original system prompt outside the compacted state.
 5. Preserves the current user request from runtime context as a non-compressible
    goal anchor.
-6. Preserves a small number of recent turns as raw messages when they are still
-   useful working context.
-7. Expands generic batch-tool results into per-task observation cards.
-8. Preserves available tools and the original tool choice.
-9. Lets the ReAct workflow continue from the compressed state.
+6. Preserves the live protocol tail only when there is an unconsumed
+   `AIMessage.tool_calls -> ToolMessage` sequence after the latest user goal.
+7. Preserves available tools and the original tool choice.
+8. Lets the ReAct workflow continue from the compressed state.
 
 The compacted observation explicitly says it is historical working state, not a
 final-answer instruction. The model may continue calling tools when the compact
@@ -102,25 +102,30 @@ multiple tool calls and compaction passes.
 Before building the compact state, the guard partitions messages into:
 
 - a compressed prefix, containing older turns; and
-- a raw suffix, containing the most recent user turns.
+- a raw suffix, containing the latest user goal and, when present, the active
+  tool-call protocol tail.
 
-A turn starts at a `HumanMessage` and includes following assistant/tool messages
-until the next `HumanMessage`. By default, the guard keeps the latest two user
-turns raw and compresses older turns. This avoids the earlier bug where the same
-recent assistant/tool messages could appear both in the compacted ledger and as
-raw messages.
+The implementation deliberately avoids keeping previous complete turns raw. A
+complete old turn can carry stale tool calls, old user goals, and large tool
+results back into the next model request. Instead, the raw suffix is limited to:
 
-For single-user-turn histories, the latest `HumanMessage` is kept raw, while the
-execution messages after that user request can still be compressed. This handles
-long one-shot ReAct workflows such as "query many dates and then summarize".
+- the latest `HumanMessage`, replaced with the runtime `current_user_input`
+  when available; and
+- the latest unconsumed assistant tool-call sequence after that user message.
+
+If a later assistant message has already consumed the tool result, that
+assistant/tool sequence is not kept raw. It is folded into the compressed
+prefix. This handles long one-shot ReAct workflows such as "query many dates and
+then summarize" without letting every intermediate ReAct step accumulate in the
+live prompt.
 
 ### Layered Context Pipeline
 
 After budget pressure triggers, `src/summarization/context_pipeline.py`
 constructs the transient compacted request in stages:
 
-1. L1-L2 deterministic trimming and observation-ledger construction via
-   `build_context_compaction_request()`.
+1. L1 zero-cost trimming and L2 ReAct trace trimming build the deterministic
+   base request via `build_context_compaction_request()`.
 2. For each oversized ToolMessage, first restore the complete tool result into
    the transient ledger and re-estimate the request. If that lossless view fits,
    the pipeline returns `l3_lossless_preserved` without calling a summary model.
@@ -136,31 +141,26 @@ the active user goal, deterministic history ledger, local semantic summaries,
 and global fallback summary are treated as separate partitions and rendered into
 one protocol-valid synthetic context observation.
 
-L3 summary prompts live in `src/prompt/tool_summary.py` and require `facts` and
-`omissions`. The prompt is scoped to one tool result and does not receive the
-global user goal, so it cannot reinterpret one partial result as the completion
-state of the whole task. L4/L5 prompts live in
-`src/prompt/context_summary.py` and require `facts`, `open_items`, and
-`evidence_refs`. If the summary model fails, L3 falls back to deterministic
-counts and numeric ranges. L4/L5 fall back to the latest successful compacted
-view and record semantic failure metadata.
+L3 summary prompts live in `src/prompt/tool_summary.py`. The prompt is scoped to
+one tool result and does not receive the global user goal, so it cannot
+reinterpret one partial result as the completion state of the whole task. L4/L5
+prompts live in `src/prompt/context_summary.py` and receive only a bounded
+history view, not the original full transcript.
 
-Semantic compression uses an isolated model client rather than the main agent
-client. The summary client uses deterministic temperature, a bounded completion
-size, no retries by default, a short timeout, and disables model thinking when
-the configured chat template supports `enable_thinking`. These controls keep an
-internal summary from consuming the full agent turn while repeating reasoning.
-
-Structured-output support is treated as a runtime capability. Summary calls
-request JSON Schema output and retain the raw response for diagnostics. If the
-model returns only reasoning, an empty visible result, or omits required schema
-fields, the shared summary capability is marked unavailable for the current
-process. The current request falls back to deterministic compaction, and later
-requests skip L3-L5 semantic model calls instead of repeating the same timeout.
+Semantic summaries are intentionally free-form visible text, not strict parsed
+JSON. This makes the compression path compatible with more local models: the
+system treats any non-empty visible model content as the summary body. If the
+model returns only reasoning or an empty visible result, the shared semantic
+summary capability is marked unavailable for the current process. The current
+request falls back to the latest deterministic compacted view, and later
+requests skip L3-L5 semantic model calls instead of repeating the same failure.
 Trace events distinguish this `context_summary_unavailable` fallback from a
-transient `context_summary_error`. A dedicated non-reasoning
-`summarization.model` is recommended when the main agent model cannot produce
-visible structured output.
+transient `context_summary_error`.
+
+Semantic summary calls are cached with a process-local LRU cache keyed by the
+summary model identity and normalized summary messages. This keeps repeated
+compaction of the same historical view stable across model calls and avoids
+paying the summary cost again when the input has not changed.
 
 Todo is protected state. It is not included in L3-L5 summary inputs. The final
 context ledger still receives the bounded todo snapshot so status and ordering
@@ -218,33 +218,6 @@ routes, or any domain-specific field names. It summarizes JSON-like results by
 structure and generic statistics such as array lengths, numeric min/max values,
 short string samples, null paths, and boolean counts.
 
-### Batch Tool Results
-Generic batch execution returns one outer `ToolMessage`, but that outer message
-can represent many completed sub-tasks. Treating it as one opaque JSON blob made
-the compacted state hard for the model and debug UI to inspect.
-
-When a tool result has the generic batch shape:
-
-```text
-batch_id
-summary
-results[]
-limitations
-```
-
-the observation builder creates a batch-aware card:
-
-- outer shape records that this is a batch result;
-- summary counts are preserved;
-- each sub-task keeps `task_id`, `tool_name`, `status`, `args`, compact
-  `result_shape`, compact `result_stats`, bounded preview, and result hash;
-- essential-mode compaction still keeps those sub-task cards before dropping the
-  whole outer observation.
-
-The compactor still does not interpret business fields inside task args or
-results. It only recognizes the generic batch envelope so one batch call can
-remain traceable as many completed tool actions.
-
 ### Budgeting Strategy
 The layered compactor first budgets the tool-observation ledger, then keeps
 historical user and assistant cards when space allows.
@@ -270,7 +243,7 @@ After compaction, the request keeps the original execution surface:
 system_prompt: original system prompt
 
 messages:
-  1. raw recent turn messages, including the runtime current user goal
+  1. raw live suffix, including the runtime current user goal and optional active protocol tail
   2. AIMessage: synthetic tool call to context_observation_ledger
   3. ToolMessage: layered compact state for compressed older turns
 
@@ -282,18 +255,17 @@ The synthetic tool observation is protocol-valid: the injected `ToolMessage`
 always has a matching preceding `AIMessage.tool_calls[].id`. The guard does not
 insert an orphan `ToolMessage` directly into the message list.
 
-Raw recent turns are kept before the synthetic ledger pair so model prompt
+The raw live suffix is kept before the synthetic ledger pair so model prompt
 templates that require an early user query can still render the compacted
 request. The synthetic ledger remains part of the same request and supplies the
-compressed historical working state after the recent user context is visible.
+compressed historical working state after the live user context is visible.
 
 Example shape:
 
 ```text
-HumanMessage(...)
-AIMessage(...)
-ToolMessage(...)
 HumanMessage(runtime current user goal)
+optional AIMessage(tool_calls=[active real tool call])
+optional ToolMessage(tool_call_id=active real tool call id)
 AIMessage(tool_calls=[context_observation_ledger])
 ToolMessage(tool_call_id=same id, content=layered compact state)
 
@@ -312,7 +284,25 @@ The compact state message tells the model:
 - if observations were dropped, older tool state was removed due to budget.
 
 ## Trace and UI Behavior
-The trace event remains:
+Each executed compression stage is emitted only when that stage actually runs.
+Skipped L4/L5 stages are not shown as completed work.
+
+Layer events use:
+
+```text
+context_compaction_layer
+```
+
+Semantic model calls use:
+
+```text
+context_summary_start
+context_summary_end
+context_summary_error
+context_summary_unavailable
+```
+
+The final compaction event remains:
 
 ```text
 react_context_budget_compacted
@@ -321,7 +311,6 @@ react_context_budget_compacted
 The event now represents state-preserving compaction rather than forced
 final-answer fallback. It records:
 
-- `compaction_mode="state_preserving"`
 - `compaction_mode="layered_context_state"` for the current implementation
 - `estimate_chars`
 - `threshold_chars`
@@ -361,8 +350,51 @@ observation shown to the model, not only from the raw observation ledger JSON.
 When todo protected state is present, the preview can therefore show the
 `todo_snapshot` section as well as the layered historical state.
 
-The UI execution summary displays this as "上下文状态压缩" and explains that the
-agent can continue calling tools after compression.
+The UI execution summary displays this as one "上下文压缩" panel and explains
+that the agent can continue calling tools after compression. The chat execution
+panel groups one compaction trigger as a single expandable item, for example:
+
+```text
+上下文压缩：L3 工具结果语义压缩
+  1. L3 摘要调用：工具结果
+  2. L3 层完成
+  3. 压缩结果：L3 工具结果语义压缩
+```
+
+If the pipeline reaches L4 or L5, the same grouping keeps the chronological
+order and labels the internal steps with their L-level.
+
+## Current Assessment
+
+The current strategy meets the main design goal: context pressure no longer
+forces the agent into a final-answer-only mode. The model receives a compacted
+working-state view and can continue tool use when more facts are required.
+
+The strongest parts of the design are:
+
+- compaction is transient and does not mutate checkpoint history;
+- the original system prompt, latest user goal, tools, and tool choice remain
+  outside the compressed state;
+- the synthetic context ledger is protocol-valid because every synthetic
+  `ToolMessage` has a matching synthetic `AIMessage.tool_calls` entry;
+- L3 first tries lossless preservation before spending a semantic summary call;
+- semantic summaries are cached and free-form, reducing both repeated cost and
+  model-compatibility failures;
+- Todo state is protected and injected as a compact snapshot only when
+  compaction triggers.
+
+The remaining risks are:
+
+- budgeting is still character-based, so it can differ from the model's true
+  tokenizer;
+- a reasoning-only local summary model can disable semantic summaries for the
+  process, causing fallback to deterministic compression;
+- free-form summaries are easier for local models but less machine-checkable
+  than strict JSON;
+- L5 can still report `still_over_budget=true` in very large sessions because
+  even the anchor-only prompt may be too large;
+- if omitted details are needed for a precise final answer, the agent must call
+  a tool again or clearly state the missing detail.
 
 ## Alternatives Considered
 
@@ -428,10 +460,10 @@ added later inside specific tools or providers if needed.
 - Tools remain available after compaction.
 - The current user request is anchored outside message-history summaries.
 - The compressed prompt is less likely to lose successful historical tool calls.
-- Batch tool calls remain inspectable at the sub-task level after compaction.
-- Recent user turns can remain raw while older turns are compressed.
-- The same recent raw messages are no longer duplicated inside the compact
-  ledger.
+- The latest user goal and active tool protocol tail can remain raw while older
+  context is compressed.
+- Complete previous turns are no longer duplicated inside the compact ledger and
+  raw suffix at the same time.
 - The model gets explicit guidance not to repeat identical successful calls.
 - The guardrail remains generic and does not depend on air-ticket fields.
 - State compaction is now a memory-management behavior, not a final-answer
@@ -444,11 +476,12 @@ added later inside specific tools or providers if needed.
   `still_over_budget=true` if even the anchor-only global fallback view remains
   too large.
 - The ledger uses character-based budgeting, not tokenizer-level accounting.
-- The recent-turn retention rule currently keeps a fixed number of recent user
-  turns raw. A future version may adapt this count based on remaining budget.
-- The batch-aware compactor recognizes a generic `batch_id` / `summary` /
-  `results` envelope, so other batch tools should reuse that shape for best
-  compaction behavior.
+- The raw suffix policy is intentionally strict. It keeps the latest user goal
+  and active protocol tail, not arbitrary recent turns. This avoids stale
+  context duplication but can make the compacted view rely heavily on the
+  synthetic ledger for older conversational nuance.
+- Free-form semantic summaries are easier for local models but cannot be
+  validated as strongly as structured JSON summaries.
 - Observation previews are lossy by design. If a final answer needs full raw tool
   output that was trimmed, the agent may need to call a tool again or explain the
   missing detail.

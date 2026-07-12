@@ -6,7 +6,6 @@ def test_get_tools_discovers_registered_tools():
 
     assert tool_names == {
         "query_current_date",
-        "run_tool_batch",
         "resolve_flight_locations",
         "search_airfare_quotes",
         "query_flight_information",
@@ -19,7 +18,6 @@ def test_get_tools_returns_copy():
 
     assert {tool.name for tool in get_tools()} == {
         "query_current_date",
-        "run_tool_batch",
         "resolve_flight_locations",
         "search_airfare_quotes",
         "query_flight_information",

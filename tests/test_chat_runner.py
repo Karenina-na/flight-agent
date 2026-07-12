@@ -464,22 +464,65 @@ def test_execution_step_summaries_exposes_context_compaction_stage():
     steps = execution_step_summaries(calls)
 
     assert steps[0]["stages"][0]["kind"] == "action"
-    assert steps[1]["kind"] == "context_compaction"
-    assert steps[1]["title"] == "上下文状态压缩"
-    assert steps[1]["summary"] == (
-        "上下文超过预算，压缩历史状态并保留 10/10 条工具观察，"
+    assert steps[1]["kind"] == "context_compaction_group"
+    assert steps[1]["group"] == "context_compaction"
+    assert steps[1]["title"] == "L1-L3 确定性压缩"
+    assert steps[1]["summary"] == "本次压缩实际执行 1 个阶段。"
+    compaction_step = steps[1]["steps"][0]
+    assert compaction_step["kind"] == "context_compaction"
+    assert compaction_step["title"] == "压缩结果：L1-L3 确定性压缩"
+    assert compaction_step["summary"] == (
+        "L1-L3 确定性压缩 已生成临时压缩视图，保留 10/10 条工具观察，"
         "丢弃 0 条；Agent 可继续调用工具。"
     )
-    assert steps[1]["details"]["estimate_chars"] == 56000
-    assert steps[1]["details"]["final_model_request_chars"] == 32000
-    assert steps[1]["details"]["semantic_skip_reason"] == "missing_summary_model"
-    assert steps[1]["details"]["still_over_budget"] is True
-    assert steps[1]["stages"][1]["title"] == "压缩后信息"
-    assert steps[1]["stages"][1]["details"]["compacted_state_preview"].startswith(
+    assert compaction_step["details"]["compaction_level_label"] == "L1-L3 确定性压缩"
+    assert compaction_step["details"]["estimate_chars"] == 56000
+    assert compaction_step["details"]["final_model_request_chars"] == 32000
+    assert compaction_step["details"]["semantic_skip_reason"] == "missing_summary_model"
+    assert compaction_step["details"]["still_over_budget"] is True
+    assert compaction_step["stages"][1]["title"] == "压缩后信息"
+    assert compaction_step["stages"][1]["details"]["compacted_state_preview"].startswith(
         '{"layers"'
     )
-    assert steps[1]["details"]["compacted_state_sha256"] == "abc123"
+    assert compaction_step["details"]["compacted_state_sha256"] == "abc123"
     assert steps[2]["summary"] == "模型生成最终回复。"
+
+
+def test_execution_step_summaries_skips_non_executed_compaction_layers():
+    calls = [
+        {
+            "index": 1,
+            "type": "event",
+            "event": "context_compaction_layer",
+            "fields": {
+                "layer": "L4",
+                "layer_name": "局部语义摘要",
+                "status": "skipped",
+                "summary": "L4 未进入。",
+            },
+        },
+        {
+            "index": 2,
+            "type": "event",
+            "event": "context_compaction_layer",
+            "fields": {
+                "layer": "L3",
+                "layer_name": "工具结构化降维",
+                "status": "completed",
+                "summary": "L3 已执行工具结果压缩。",
+                "change_count": 2,
+            },
+        },
+    ]
+
+    steps = execution_step_summaries(calls)
+
+    assert len(steps) == 1
+    assert steps[0]["kind"] == "context_compaction_group"
+    assert steps[0]["group"] == "context_compaction"
+    assert steps[0]["steps"][0]["kind"] == "context_compaction_layer"
+    assert steps[0]["steps"][0]["title"] == "L3 层完成"
+    assert steps[0]["steps"][0]["stages"][0]["title"] == "工具结构化降维"
 
 
 def test_execution_step_summaries_exposes_context_summary_lifecycle():
@@ -517,12 +560,15 @@ def test_execution_step_summaries_exposes_context_summary_lifecycle():
     steps = execution_step_summaries(calls)
 
     assert len(steps) == 1
-    assert steps[0]["kind"] == "context_summary"
-    assert steps[0]["title"] == "工具结果语义压缩"
-    assert steps[0]["status"] == "completed"
-    assert steps[0]["stages"][0]["details"]["input_chars"] == 2362
-    assert steps[0]["stages"][0]["details"]["output_chars"] == 640
-    assert steps[0]["stages"][0]["details"]["duration_ms"] == 1820
+    assert steps[0]["kind"] == "context_compaction_group"
+    assert steps[0]["group"] == "context_compaction"
+    assert steps[0]["steps"][0]["kind"] == "context_summary"
+    assert steps[0]["steps"][0]["title"] == "L3 摘要调用：工具结果"
+    assert steps[0]["steps"][0]["status"] == "completed"
+    assert steps[0]["steps"][0]["stages"][0]["title"] == "L3 摘要调用：工具结果"
+    assert steps[0]["steps"][0]["stages"][0]["details"]["input_chars"] == 2362
+    assert steps[0]["steps"][0]["stages"][0]["details"]["output_chars"] == 640
+    assert steps[0]["steps"][0]["stages"][0]["details"]["duration_ms"] == 1820
 
 
 def test_execution_step_summaries_exposes_semantic_summary_fallback():
@@ -558,13 +604,173 @@ def test_execution_step_summaries_exposes_semantic_summary_fallback():
     steps = execution_step_summaries(calls)
 
     assert len(steps) == 1
-    assert steps[0]["kind"] == "context_summary"
-    assert steps[0]["title"] == "工具结果语义压缩"
-    assert steps[0]["status"] == "completed"
-    assert "未生成可用的最终摘要" in steps[0]["summary"]
-    assert "确定性压缩结果" in steps[0]["summary"]
-    assert steps[0]["stages"][0]["details"]["reason"] == (
+    assert steps[0]["kind"] == "context_compaction_group"
+    assert steps[0]["steps"][0]["kind"] == "context_summary"
+    assert steps[0]["steps"][0]["title"] == "L3 摘要调用：工具结果"
+    assert steps[0]["steps"][0]["status"] == "completed"
+    assert "未生成可用的最终摘要" in steps[0]["steps"][0]["summary"]
+    assert "确定性压缩结果" in steps[0]["steps"][0]["summary"]
+    assert steps[0]["steps"][0]["stages"][0]["details"]["reason"] == (
         "reasoning_only_output"
+    )
+
+
+def test_execution_step_summaries_groups_repeated_compactions_separately():
+    calls = [
+        {
+            "index": 1,
+            "type": "event",
+            "event": "context_compaction_layer",
+            "fields": {
+                "layer": "L1",
+                "layer_name": "零成本修剪",
+                "status": "completed",
+                "summary": "L1 删除重复工具结果。",
+                "change_count": 1,
+            },
+        },
+        {
+            "index": 2,
+            "type": "event",
+            "event": "react_context_budget_compacted",
+            "fields": {
+                "estimate_chars": 56000,
+                "threshold_chars": 27853,
+                "observation_count": 3,
+                "preserved_observation_count": 3,
+                "dropped_observation_count": 0,
+                "compaction_level": "l1_l3",
+                "post_compaction_chars": 30000,
+            },
+        },
+        {
+            "index": 3,
+            "type": "model",
+            "event": "model_call_start",
+            "request": {"messages": [{"role": "human", "content": "continue"}]},
+        },
+        {
+            "index": 4,
+            "type": "model",
+            "event": "model_call_end",
+            "response": [{"content_block_types": ["function_call"]}],
+        },
+        {
+            "index": 5,
+            "type": "event",
+            "event": "context_summary_start",
+            "fields": {
+                "stage": "l4_local_semantic",
+                "input_chars": 8000,
+            },
+        },
+        {
+            "index": 6,
+            "type": "event",
+            "event": "context_summary_end",
+            "fields": {
+                "stage": "l4_local_semantic",
+                "duration_ms": 1200,
+                "output_chars": 400,
+            },
+        },
+        {
+            "index": 7,
+            "type": "event",
+            "event": "react_context_budget_compacted",
+            "fields": {
+                "estimate_chars": 62000,
+                "threshold_chars": 27853,
+                "observation_count": 6,
+                "preserved_observation_count": 6,
+                "dropped_observation_count": 0,
+                "compaction_level": "l4_local_semantic",
+                "post_compaction_chars": 24000,
+            },
+        },
+    ]
+
+    steps = execution_step_summaries(calls)
+
+    assert [step["kind"] for step in steps] == [
+        "context_compaction_group",
+        "react_step",
+        "context_compaction_group",
+    ]
+    compaction_groups = [
+        step for step in steps if step["kind"] == "context_compaction_group"
+    ]
+    assert len(compaction_groups) == 2
+    assert [step["title"] for step in compaction_groups] == [
+        "L1-L3 确定性压缩",
+        "L4 局部语义摘要",
+    ]
+    assert [len(step["steps"]) for step in compaction_groups] == [2, 2]
+    assert compaction_groups[0]["steps"][0]["title"] == "L1 层完成"
+    assert compaction_groups[1]["steps"][0]["title"] == "L4 摘要调用：历史上下文"
+
+
+def test_execution_step_summaries_use_non_redundant_compaction_titles():
+    calls = [
+        {
+            "index": 1,
+            "type": "event",
+            "event": "context_summary_start",
+            "fields": {"stage": "l3_tool_semantic", "input_chars": 2000},
+        },
+        {
+            "index": 2,
+            "type": "event",
+            "event": "context_summary_end",
+            "fields": {
+                "stage": "l3_tool_semantic",
+                "duration_ms": 1000,
+                "output_chars": 300,
+            },
+        },
+        {
+            "index": 3,
+            "type": "event",
+            "event": "context_compaction_layer",
+            "fields": {
+                "layer": "L3",
+                "layer_name": "工具结果压缩",
+                "status": "completed",
+                "summary": "L3 工具结果语义压缩完成。",
+            },
+        },
+        {
+            "index": 4,
+            "type": "event",
+            "event": "react_context_budget_compacted",
+            "fields": {
+                "estimate_chars": 56000,
+                "threshold_chars": 27853,
+                "observation_count": 2,
+                "preserved_observation_count": 2,
+                "dropped_observation_count": 0,
+                "compaction_level": "l3_tool_semantic",
+                "post_compaction_chars": 20000,
+            },
+        },
+    ]
+
+    steps = execution_step_summaries(calls)
+
+    assert len(steps) == 1
+    group = steps[0]
+    assert group["title"] == "L3 工具结果语义压缩"
+    assert [step["title"] for step in group["steps"]] == [
+        "L3 摘要调用：工具结果",
+        "L3 层完成",
+        "压缩结果：L3 工具结果语义压缩",
+    ]
+    all_titles = [group["title"]] + [step["title"] for step in group["steps"]]
+    assert "L3 工具结果语义压缩 上下文状态压缩" not in all_titles
+    step_titles = [step["title"] for step in group["steps"]]
+    assert all(
+        title.startswith(("L1", "L2", "L3", "L4", "L5", "压缩结果：L"))
+        for title in step_titles
     )
 
 

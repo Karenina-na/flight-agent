@@ -493,6 +493,12 @@ def _trace_react_step_nodes(
         if not isinstance(call, dict):
             continue
         call_type_value = call.get("type")
+        if call.get("event") == "context_compaction_layer":
+            if _is_skipped_compaction_layer_call(call):
+                continue
+            flush_step()
+            steps.append(_react_compaction_layer_node(turn_id, len(steps) + 1, call))
+            continue
         if call.get("event") == "react_context_budget_compacted":
             flush_step()
             steps.append(_react_compaction_node(turn_id, len(steps) + 1, call))
@@ -544,18 +550,61 @@ def _trace_react_step_nodes(
     return steps
 
 
+def _react_compaction_layer_node(
+    turn_id: str,
+    step_number: int,
+    call: dict[str, Any],
+) -> dict[str, Any]:
+    fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+    layer = str(fields.get("layer") or "L?")
+    layer_name = str(fields.get("layer_name") or "压缩层")
+    status = str(fields.get("status") or "completed")
+    return {
+        "id": f"{turn_id}:react-compaction-layer-{step_number}",
+        "type": "react_compaction_layer",
+        "label": f"{layer} 层完成",
+        "status": status,
+        "summary": {
+            "layer": layer,
+            "layer_name": layer_name,
+            "summary": fields.get("summary"),
+            "estimate_chars": fields.get("estimate_chars"),
+            "threshold_chars": fields.get("threshold_chars"),
+            "post_compaction_chars": fields.get("post_compaction_chars"),
+        },
+        "meta": {
+            "step_index": step_number - 1,
+            "event_count": 1,
+            "layer": layer,
+            "layer_name": layer_name,
+            "status": status,
+            "fields": json_safe(fields),
+        },
+        "children": [_trace_event_node(call)],
+    }
+
+
+def _is_skipped_compaction_layer_call(call: dict[str, Any]) -> bool:
+    fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+    return str(fields.get("status") or "").lower() == "skipped"
+
+
 def _react_compaction_node(
     turn_id: str,
     step_number: int,
     call: dict[str, Any],
 ) -> dict[str, Any]:
     fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+    compaction_level = str(fields.get("compaction_level") or "")
+    compaction_label = _compaction_level_label(compaction_level)
     return {
         "id": f"{turn_id}:react-compaction-{step_number}",
         "type": "react_compaction",
-        "label": "State-Preserving Context Compaction",
+        "label": f"压缩结果：{compaction_label}",
         "status": "completed",
         "summary": {
+            "compaction_level": compaction_level,
+            "compaction_level_label": compaction_label,
             "estimate_chars": fields.get("estimate_chars"),
             "threshold_chars": fields.get("threshold_chars"),
             "preserved_observations": fields.get("preserved_observation_count"),
@@ -567,6 +616,8 @@ def _react_compaction_node(
             "event_count": 1,
             "estimate_chars": fields.get("estimate_chars"),
             "threshold_chars": fields.get("threshold_chars"),
+            "compaction_level": compaction_level,
+            "compaction_level_label": compaction_label,
             "observation_count": fields.get("observation_count"),
             "preserved_observation_count": fields.get("preserved_observation_count"),
             "dropped_observation_count": fields.get("dropped_observation_count"),
@@ -710,6 +761,12 @@ def _trace_event_node(call: dict[str, Any]) -> dict[str, Any]:
 
 def _trace_event_label(call: dict[str, Any]) -> str:
     event_name = str(call.get("event", "event"))
+    if event_name == "context_compaction_layer":
+        fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+        return f"{fields.get('layer') or 'L?'} 层完成"
+    if event_name == "react_context_budget_compacted":
+        fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+        return f"压缩结果：{_compaction_level_label(str(fields.get('compaction_level') or ''))}"
     if call.get("type") == "tool":
         return f"{event_name}: {call.get('tool_name', '-')}"
     if call.get("type") == "model":
@@ -824,6 +881,25 @@ def _react_stage_summary(stage_name: str, calls: list[dict[str, Any]]) -> dict[s
 
 def _trace_event_summary(call: dict[str, Any]) -> dict[str, Any]:
     event_name = str(call.get("event", "event"))
+    if event_name == "context_compaction_layer":
+        fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+        return {
+            "layer": fields.get("layer"),
+            "layer_name": fields.get("layer_name"),
+            "status": fields.get("status"),
+            "summary": fields.get("summary"),
+        }
+    if event_name == "react_context_budget_compacted":
+        fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+        compaction_level = str(fields.get("compaction_level") or "")
+        return {
+            "compaction_level": compaction_level,
+            "compaction_level_label": _compaction_level_label(compaction_level),
+            "estimate_chars": fields.get("estimate_chars"),
+            "threshold_chars": fields.get("threshold_chars"),
+            "post_compaction_chars": fields.get("post_compaction_chars"),
+            "still_over_budget": fields.get("still_over_budget"),
+        }
     if event_name == "model_call_start":
         request = call.get("request")
         messages = request.get("messages") if isinstance(request, dict) else []
@@ -849,6 +925,17 @@ def _trace_event_summary(call: dict[str, Any]) -> dict[str, Any]:
         "event": event_name,
         "turn_id": fields.get("turn_id") if isinstance(fields, dict) else None,
     }
+
+
+def _compaction_level_label(level: str) -> str:
+    labels = {
+        "l1_l3": "L1-L3 确定性压缩",
+        "l3_lossless_preserved": "L3 完整工具结果保留",
+        "l3_tool_semantic": "L3 工具结果语义压缩",
+        "l4_local_semantic": "L4 局部语义摘要",
+        "l5_global_fallback": "L5 全局兜底摘要",
+    }
+    return labels.get(level, level or "未知层级压缩")
 
 
 def _request_args_preview(request: object) -> object:

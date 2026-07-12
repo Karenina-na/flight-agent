@@ -218,9 +218,8 @@ def test_web_app_rejects_duplicate_chat_while_request_is_running(monkeypatch, tm
 
 
 def test_demo_message_matches_air_ticket_mvp():
-    assert "北京到上海" in DEMO_MESSAGE
-    assert "2026-07-10" in DEMO_MESSAGE
-    assert "机票报价样本" in DEMO_MESSAGE
+    assert "明天上海到北京" in DEMO_MESSAGE
+    assert "信息出处" in DEMO_MESSAGE
     assert "create_demo_task" not in DEMO_MESSAGE
 
 
@@ -242,9 +241,9 @@ def test_main_page_left_sidebar_is_minimal_and_demo_fills_input_only():
     assert "inputEl.value = COMPRESSION_STRESS_PROMPT" in INDEX_HTML
     assert "const DEMO_PROMPT" in INDEX_HTML
     assert "const COMPRESSION_STRESS_PROMPT" in INDEX_HTML
-    assert "16K 上下文压力" in INDEX_HTML
-    assert "连续查询接下来 12 天" in INDEX_HTML
-    assert "4 条航线" in INDEX_HTML
+    assert "明天上海到北京" in INDEX_HTML
+    assert "明天、后天、大后天上海到北京" in INDEX_HTML
+    assert "购买建议" in INDEX_HTML
 
 
 def test_main_page_keeps_debug_sidebar_lightweight():
@@ -267,6 +266,20 @@ def test_main_page_keeps_debug_sidebar_lightweight():
     assert ".msg.assistant table" in INDEX_HTML
     assert "renderExecutionSteps(message.execution_steps)" in INDEX_HTML
     assert INDEX_HTML.index("renderExecutionSteps(message.execution_steps)") < INDEX_HTML.index("renderAssistantContent(message.content)")
+    assert "isContextCompactionStep" in INDEX_HTML
+    assert "renderContextCompactionPanel" in INDEX_HTML
+    assert "renderContextCompactionPanels" not in INDEX_HTML
+    assert "const compactionSteps" not in INDEX_HTML
+    assert "const normalSteps" not in INDEX_HTML
+    assert "items.map((step, index) =>" in INDEX_HTML
+    assert "return renderContextCompactionPanel(step, index)" in INDEX_HTML
+    assert "context-compaction-panel" in INDEX_HTML
+    assert "context-compaction-body" in INDEX_HTML
+    assert "上下文压缩" in INDEX_HTML
+    assert "resize: vertical" in INDEX_HTML
+    assert 'group === "context_compaction"' in INDEX_HTML
+    assert 'kind === "context_compaction_group"' in INDEX_HTML
+    assert "childSteps.length" in INDEX_HTML
     assert "execution-steps" in INDEX_HTML
     assert "assistant-output" in INDEX_HTML
     assert "assistant-answer" in INDEX_HTML

@@ -16,6 +16,12 @@ from src.summarization.context_compaction import (
     build_context_compaction_request,
     replace_active_tool_messages,
 )
+from src.summarization.context_trace import (
+    emit_deterministic_layer_events,
+    emit_l3_layer_event,
+    emit_l4_layer_event,
+    emit_l5_layer_event,
+)
 from src.summarization.semantic_cache import SemanticSummaryCache
 from src.summarization.structured_output import (
     SemanticSummaryCapability,
@@ -116,6 +122,12 @@ def build_context_pipeline_request(
         post_compaction_chars=base_chars,
         still_over_budget=base_chars > threshold_chars,
     )
+    emit_deterministic_layer_events(
+        summary_event_callback,
+        result=base_result,
+        estimate_chars=estimate_chars,
+        threshold_chars=threshold_chars,
+    )
     working_result = base_result
     candidates = base_result.tool_semantic_candidates or []
     if candidates:
@@ -125,12 +137,19 @@ def build_context_pipeline_request(
         )
         lossless_chars = estimate_request_chars(lossless_result.request)
         if lossless_chars <= threshold_chars:
-            return replace(
+            lossless_result = replace(
                 lossless_result,
                 post_compaction_chars=lossless_chars,
                 still_over_budget=False,
                 semantic_skip_reason="within_budget_with_lossless_tool_results",
             )
+            emit_l3_layer_event(
+                summary_event_callback,
+                result=lossless_result,
+                estimate_chars=estimate_chars,
+                threshold_chars=threshold_chars,
+            )
+            return lossless_result
 
     if (
         candidates
@@ -177,6 +196,12 @@ def build_context_pipeline_request(
             reason=capability.reason or "semantic_summary_unavailable",
         )
 
+    emit_l3_layer_event(
+        summary_event_callback,
+        result=working_result,
+        estimate_chars=estimate_chars,
+        threshold_chars=threshold_chars,
+    )
     if working_result.post_compaction_chars <= threshold_chars:
         if working_result.compaction_level == "l3_tool_semantic":
             return replace(working_result, semantic_skip_reason="within_budget_after_l3")
@@ -222,6 +247,12 @@ def build_context_pipeline_request(
             post_compaction_chars=l4_chars,
             still_over_budget=l4_chars > threshold_chars,
         )
+        emit_l4_layer_event(
+            summary_event_callback,
+            result=l4_result,
+            estimate_chars=estimate_chars,
+            threshold_chars=threshold_chars,
+        )
         if l4_chars <= threshold_chars:
             return l4_result
 
@@ -242,11 +273,18 @@ def build_context_pipeline_request(
             semantic_summary_count=working_result.semantic_summary_count + 2,
         )
         l5_chars = estimate_request_chars(l5_result.request)
-        return replace(
+        l5_result = replace(
             l5_result,
             post_compaction_chars=l5_chars,
             still_over_budget=l5_chars > threshold_chars,
         )
+        emit_l5_layer_event(
+            summary_event_callback,
+            result=l5_result,
+            estimate_chars=estimate_chars,
+            threshold_chars=threshold_chars,
+        )
+        return l5_result
     except SemanticSummaryUnavailableError as exc:
         return _with_semantic_unavailable(
             working_result,

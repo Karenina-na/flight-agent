@@ -761,13 +761,28 @@ def tool_call_summaries(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def execution_step_summaries(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return compact ReAct steps for the main chat UI."""
     steps: list[dict[str, Any]] = []
+    compaction_buffer: list[dict[str, Any]] = []
     index = 0
+
+    def flush_compaction_buffer() -> None:
+        nonlocal compaction_buffer
+        if compaction_buffer:
+            steps.append(_context_compaction_group_step(compaction_buffer))
+            compaction_buffer = []
+
     while index < len(calls):
         call = calls[index]
         call_type = call.get("type")
         event = call.get("event")
+        if event == "context_compaction_layer":
+            layer_step = _context_compaction_layer_step(call)
+            if layer_step is not None:
+                compaction_buffer.append(layer_step)
+            index += 1
+            continue
         if event == "react_context_budget_compacted":
-            steps.append(_context_compaction_step(call))
+            compaction_buffer.append(_context_compaction_step(call))
+            flush_compaction_buffer()
             index += 1
             continue
         if event == "context_summary_start":
@@ -781,7 +796,7 @@ def execution_step_summaries(calls: list[dict[str, Any]]) -> list[dict[str, Any]
                 }:
                     summary_calls.append(next_call)
                     index += 1
-            steps.append(_context_summary_step(summary_calls))
+            compaction_buffer.append(_context_summary_step(summary_calls))
             index += 1
             continue
         if event in {
@@ -789,10 +804,11 @@ def execution_step_summaries(calls: list[dict[str, Any]]) -> list[dict[str, Any]
             "context_summary_error",
             "context_summary_unavailable",
         }:
-            steps.append(_context_summary_step([call]))
+            compaction_buffer.append(_context_summary_step([call]))
             index += 1
             continue
         if call_type == "model" and event == "model_call_start":
+            flush_compaction_buffer()
             model_calls = [call]
             next_index = index + 1
             if next_index < len(calls):
@@ -827,6 +843,7 @@ def execution_step_summaries(calls: list[dict[str, Any]]) -> list[dict[str, Any]
                 tool_groups.extend(_group_tool_call_events(tool_batch))
             steps.append(_react_execution_step(len(steps) + 1, model_calls, tool_groups))
         elif call_type == "tool" and event == "tool_call_start":
+            flush_compaction_buffer()
             tool_batch = [call]
             while index + 1 < len(calls) and calls[index + 1].get("type") == "tool":
                 index += 1
@@ -839,6 +856,7 @@ def execution_step_summaries(calls: list[dict[str, Any]]) -> list[dict[str, Any]
                 )
             )
         index += 1
+    flush_compaction_buffer()
     return steps
 
 
@@ -892,8 +910,60 @@ def _react_execution_step(
     }
 
 
+def _context_compaction_group_step(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return one grouped UI step for a single context-compaction trigger."""
+    ordered_items = sorted(items, key=lambda item: int(item.get("index") or 0))
+    final_step = next(
+        (item for item in reversed(ordered_items) if item.get("kind") == "context_compaction"),
+        ordered_items[-1],
+    )
+    final_details = (
+        final_step.get("details")
+        if isinstance(final_step.get("details"), dict)
+        else {}
+    )
+    compaction_label = str(
+        final_details.get("compaction_level_label")
+        or final_step.get("title")
+        or "上下文压缩"
+    )
+    child_stages = [
+        stage
+        for item in ordered_items
+        for stage in (item.get("stages") if isinstance(item.get("stages"), list) else [])
+    ]
+    status = _combined_status(item.get("status") for item in ordered_items)
+    event_count = sum(int(item.get("event_count") or 0) for item in ordered_items)
+    stage_titles = [str(item.get("title") or item.get("kind") or "") for item in ordered_items]
+
+    return {
+        "index": ordered_items[0].get("index"),
+        "kind": "context_compaction_group",
+        "group": "context_compaction",
+        "title": compaction_label,
+        "status": status,
+        "event_count": event_count,
+        "summary": f"本次压缩实际执行 {len(ordered_items)} 个阶段。",
+        "steps": ordered_items,
+        "stages": child_stages,
+        "details": {
+            "step_count": len(ordered_items),
+            "stage_titles": stage_titles,
+            "compaction_level": final_details.get("compaction_level"),
+            "compaction_level_label": final_details.get("compaction_level_label"),
+            "estimate_chars": final_details.get("estimate_chars"),
+            "threshold_chars": final_details.get("threshold_chars"),
+            "post_compaction_chars": final_details.get("post_compaction_chars"),
+            "final_model_request_chars": final_details.get("final_model_request_chars"),
+            "still_over_budget": final_details.get("still_over_budget"),
+        },
+    }
+
+
 def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
     fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+    compaction_level = str(fields.get("compaction_level") or "")
+    compaction_label = _compaction_level_label(compaction_level)
     observation_count = int(fields.get("observation_count") or 0)
     preserved_count = int(fields.get("preserved_observation_count") or 0)
     dropped_count = int(fields.get("dropped_observation_count") or 0)
@@ -901,23 +971,25 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
     return {
         "index": call.get("index"),
         "kind": "context_compaction",
-        "title": "上下文状态压缩",
+        "group": "context_compaction",
+        "title": f"压缩结果：{compaction_label}",
         "status": "completed",
         "event_count": 1,
         "summary": (
-            f"上下文超过预算，压缩历史状态并保留 {preserved_count}/{observation_count} "
+            f"{compaction_label} 已生成临时压缩视图，保留 {preserved_count}/{observation_count} "
             f"条工具观察，丢弃 {dropped_count} 条；Agent 可继续调用工具。"
         ),
         "stages": [
             {
                 "kind": "context_compaction",
-                "title": "状态压缩",
+                "title": "最终压缩视图",
                 "status": "completed",
                 "summary": (
-                    f"原请求估算 {fields.get('estimate_chars')} chars，"
+                    f"压缩层级为 {compaction_label}；原请求估算 {fields.get('estimate_chars')} chars，"
                     f"阈值 {fields.get('threshold_chars')} chars。"
                 ),
                 "details": {
+                    "compaction_level_label": compaction_label,
                     "estimate_chars": fields.get("estimate_chars"),
                     "threshold_chars": fields.get("threshold_chars"),
                     "observation_count": observation_count,
@@ -929,7 +1001,7 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
                     "final_model_request_chars": fields.get("final_model_request_chars"),
                     "post_compaction_chars": fields.get("post_compaction_chars"),
                     "still_over_budget": fields.get("still_over_budget"),
-                    "compaction_level": fields.get("compaction_level"),
+                    "compaction_level": compaction_level,
                     "semantic_skip_reason": fields.get("semantic_skip_reason"),
                     "semantic_summary_unavailable": fields.get(
                         "semantic_summary_unavailable"
@@ -963,6 +1035,7 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
             else []
         ),
         "details": {
+            "compaction_level_label": compaction_label,
             "estimate_chars": fields.get("estimate_chars"),
             "threshold_chars": fields.get("threshold_chars"),
             "observation_count": observation_count,
@@ -974,7 +1047,7 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
             "final_model_request_chars": fields.get("final_model_request_chars"),
             "post_compaction_chars": fields.get("post_compaction_chars"),
             "still_over_budget": fields.get("still_over_budget"),
-            "compaction_level": fields.get("compaction_level"),
+            "compaction_level": compaction_level,
             "semantic_skip_reason": fields.get("semantic_skip_reason"),
             "semantic_summary_unavailable": fields.get(
                 "semantic_summary_unavailable"
@@ -989,6 +1062,62 @@ def _context_compaction_step(call: dict[str, Any]) -> dict[str, Any]:
             **compacted_state_details,
         },
     }
+
+
+def _context_compaction_layer_step(call: dict[str, Any]) -> dict[str, Any] | None:
+    fields = call.get("fields") if isinstance(call.get("fields"), dict) else {}
+    layer = str(fields.get("layer") or "L?")
+    layer_name = str(fields.get("layer_name") or "压缩层")
+    status = str(fields.get("status") or "completed")
+    if status == "skipped":
+        return None
+    summary = str(fields.get("summary") or f"{layer} {layer_name}。")
+    details = {
+        "layer": layer,
+        "layer_name": layer_name,
+        "status": status,
+        "summary": summary,
+        "estimate_chars": fields.get("estimate_chars"),
+        "threshold_chars": fields.get("threshold_chars"),
+        "change_count": fields.get("change_count"),
+        "compaction_level": fields.get("compaction_level"),
+        "semantic_summary_count": fields.get("semantic_summary_count"),
+        "tool_semantic_candidate_count": fields.get("tool_semantic_candidate_count"),
+        "tool_semantic_summary_count": fields.get("tool_semantic_summary_count"),
+        "global_fallback_used": fields.get("global_fallback_used"),
+        "post_compaction_chars": fields.get("post_compaction_chars"),
+        "still_over_budget": fields.get("still_over_budget"),
+    }
+    return {
+        "index": call.get("index"),
+        "kind": "context_compaction_layer",
+        "group": "context_compaction",
+        "title": f"{layer} 层完成",
+        "status": status,
+        "event_count": 1,
+        "summary": summary,
+        "stages": [
+            {
+                "kind": "context_compaction_layer",
+                "title": layer_name,
+                "status": status,
+                "summary": summary,
+                "details": details,
+            }
+        ],
+        "details": details,
+    }
+
+
+def _compaction_level_label(level: str) -> str:
+    labels = {
+        "l1_l3": "L1-L3 确定性压缩",
+        "l3_lossless_preserved": "L3 完整工具结果保留",
+        "l3_tool_semantic": "L3 工具结果语义压缩",
+        "l4_local_semantic": "L4 局部语义摘要",
+        "l5_global_fallback": "L5 全局兜底摘要",
+    }
+    return labels.get(level, level or "未知层级压缩")
 
 
 def _context_summary_step(calls: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1017,10 +1146,12 @@ def _context_summary_step(calls: list[dict[str, Any]]) -> dict[str, Any]:
         status = "running"
     stage = str(details.get("stage") or "context_summary")
     title = {
-        "l3_tool_semantic": "工具结果语义压缩",
-        "local_semantic_summary": "历史上下文摘要",
-        "global_fallback_summary": "全局兜底摘要",
-    }.get(stage, "上下文摘要")
+        "l3_tool_semantic": "L3 摘要调用：工具结果",
+        "local_semantic_summary": "L4 摘要调用：历史上下文",
+        "l4_local_semantic": "L4 摘要调用：历史上下文",
+        "global_fallback_summary": "L5 摘要调用：全局兜底",
+        "l5_global_fallback": "L5 摘要调用：全局兜底",
+    }.get(stage, "摘要调用")
     if last_event == "context_summary_unavailable":
         summary = (
             "摘要模型未生成可用的最终摘要；本进程已停用语义摘要，"
@@ -1047,6 +1178,7 @@ def _context_summary_step(calls: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "index": first_call.get("index"),
         "kind": "context_summary",
+        "group": "context_compaction",
         "title": title,
         "status": status,
         "event_count": len(calls),
