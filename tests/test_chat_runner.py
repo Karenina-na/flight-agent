@@ -215,6 +215,179 @@ def test_empty_final_output_uses_latest_successful_airfare_tool_result():
     assert "1085" in answer
 
 
+def test_empty_final_output_aggregates_all_successful_airfare_results():
+    calls = []
+    for index, (date, price) in enumerate(
+        [("2026-07-14", 350), ("2026-07-15", 400), ("2026-07-16", 449)],
+        start=1,
+    ):
+        calls.append(
+            {
+                "index": index,
+                "type": "tool",
+                "event": "tool_call_end",
+                "tool_name": "search_airfare_quotes",
+                "tool_call_id": f"call-{index}",
+                "status": "success",
+                "response": {
+                    "content": json.dumps(
+                        {
+                            "query": {
+                                "origin": "上海",
+                                "destination": "北京",
+                                "departure_date": date,
+                            },
+                            "captured_at": "2026-07-13T10:00:00+08:00",
+                            "sources_used": ["fliggy_mcp"],
+                            "quotes": [
+                                {
+                                    "flight_number": f"MU{index}",
+                                    "airline": "东航",
+                                    "origin_iata": "PVG",
+                                    "destination_iata": "PKX",
+                                    "scheduled_departure": f"{date}T08:00",
+                                    "price": price,
+                                    "currency": "CNY",
+                                }
+                            ],
+                            "limitations": ["Prices are point-in-time quotes."],
+                        },
+                        ensure_ascii=False,
+                    )
+                },
+            }
+        )
+    failed_call = json.loads(json.dumps(calls[-1], ensure_ascii=False))
+    failed_call["tool_call_id"] = "call-failed"
+    failed_call["status"] = "error"
+    failed_call["response"]["content"] = failed_call["response"]["content"].replace(
+        "2026-07-16",
+        "2026-07-17",
+    )
+    calls.append(failed_call)
+
+    answer = fallback_answer_from_tool_results(calls)
+
+    assert answer is not None
+    assert "共 3 组" in answer
+    assert "2026-07-14" in answer and "350" in answer
+    assert "2026-07-15" in answer and "400" in answer
+    assert "2026-07-16" in answer and "449" in answer
+    assert "2026-07-17" not in answer
+
+
+def test_empty_final_output_includes_historical_checkpoint_airfare_results():
+    historical_payload = {
+        "query": {
+            "origin": "上海",
+            "destination": "北京",
+            "departure_date": "2026-07-14",
+        },
+        "captured_at": "2026-07-13T13:59:08+08:00",
+        "sources_used": ["fliggy_mcp"],
+        "quotes": [{"flight_number": "KN5956", "price": 330, "currency": "CNY"}],
+        "limitations": ["Prices are point-in-time quotes."],
+    }
+    current_payload = {
+        "query": {
+            "origin": "PVG",
+            "destination": "PEK",
+            "departure_date": "2026-07-15",
+        },
+        "captured_at": "2026-07-13T14:06:44+08:00",
+        "sources_used": ["fliggy_mcp"],
+        "quotes": [{"flight_number": "KN5978", "price": 400, "currency": "CNY"}],
+        "limitations": ["Prices are point-in-time quotes."],
+    }
+    calls = [
+        {
+            "type": "tool",
+            "event": "tool_call_end",
+            "tool_name": "query_current_date",
+            "status": "success",
+            "response": {"content": '{"target_date":"2026-07-14"}'},
+        },
+        {
+            "type": "tool",
+            "event": "tool_call_end",
+            "tool_name": "search_airfare_quotes",
+            "status": "success",
+            "response": {"content": json.dumps(current_payload, ensure_ascii=False)},
+        }
+    ]
+    checkpoint_messages = [
+        ToolMessage(
+            content=json.dumps(
+                {
+                    **historical_payload,
+                    "query": {
+                        **historical_payload["query"],
+                        "departure_date": "2026-07-13",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            name="search_airfare_quotes",
+            tool_call_id="call-unrelated-history",
+        ),
+        ToolMessage(
+            content=json.dumps(historical_payload, ensure_ascii=False),
+            name="search_airfare_quotes",
+            tool_call_id="call-history",
+        ),
+        ToolMessage(
+            content=json.dumps(current_payload, ensure_ascii=False),
+            name="search_airfare_quotes",
+            tool_call_id="call-current",
+        ),
+    ]
+
+    answer = fallback_answer_from_tool_results(calls, messages=checkpoint_messages)
+
+    assert answer is not None
+    assert "共 2 组" in answer
+    assert "2026-07-14" in answer and "330" in answer
+    assert "2026-07-15" in answer and "400" in answer
+    assert "### 2026-07-13" not in answer
+
+
+def test_empty_final_output_discloses_incomplete_todo_state():
+    payload = {
+        "query": {
+            "origin": "上海",
+            "destination": "北京",
+            "departure_date": "2026-07-15",
+        },
+        "captured_at": "2026-07-13T14:06:44+08:00",
+        "sources_used": ["fliggy_mcp"],
+        "quotes": [{"flight_number": "KN5978", "price": 400, "currency": "CNY"}],
+        "limitations": [],
+    }
+    calls = [
+        {
+            "type": "tool",
+            "event": "tool_call_end",
+            "tool_name": "search_airfare_quotes",
+            "status": "success",
+            "response": {"content": json.dumps(payload, ensure_ascii=False)},
+        }
+    ]
+
+    answer = fallback_answer_from_tool_results(
+        calls,
+        todos=[
+            {"content": "查询三个日期报价", "status": "completed"},
+            {"content": "整理价格范围", "status": "in_progress"},
+            {"content": "给出购买建议", "status": "pending"},
+        ],
+    )
+
+    assert answer is not None
+    assert "任务未完整完成" in answer
+    assert "进行中：整理价格范围" in answer
+    assert "待处理：给出购买建议" in answer
+
+
 def test_execution_step_summaries_group_react_steps_without_full_session_trace():
     calls = [
         {

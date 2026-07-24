@@ -14,12 +14,14 @@ from src.prompt.middleware import (
     build_skill_prompt_addendum,
 )
 from src.prompt.tool_summary import build_tool_result_summary_messages
+from src.prompt.todo import TODO_GUIDANCE_PROMPT
 
 __all__ = [
     "CORE_PROMPT",
     "CONTEXT_LEDGER_TOOL_NAME",
     "DOMAIN_PROMPT",
     "SYSTEM_PROMPT",
+    "TODO_GUIDANCE_PROMPT",
     "build_context_compaction_user_prompt",
     "build_context_ledger_tool_call_args",
     "build_context_ledger_tool_observation",

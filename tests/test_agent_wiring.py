@@ -7,6 +7,7 @@ from src.guardrails import (
 )
 from src.memory import MemoryMiddleware
 from src.observability import ObservabilityMiddleware
+from src.prompt import TODO_GUIDANCE_PROMPT
 from src.skills import SkillMiddleware
 
 
@@ -15,6 +16,8 @@ def test_agent_middleware_is_flat_and_includes_observability_skills_and_memory()
     assert isinstance(middleware[0], SkillMiddleware)
     assert isinstance(middleware[1], MemoryMiddleware)
     assert isinstance(middleware[2], TodoListMiddleware)
+    assert middleware[2].system_prompt == TODO_GUIDANCE_PROMPT
+    assert "Only use this tool if" not in middleware[2].system_prompt
     assert isinstance(middleware[3], AgentStateCompactionMiddleware)
     assert middleware[3].summary_model is not None
     assert middleware[3].semantic_enabled is True
@@ -36,7 +39,7 @@ def test_agent_middleware_is_flat_and_includes_observability_skills_and_memory()
     assert middleware[5].loop_stop_after == 3
     assert isinstance(middleware[6], ToolCallLimitMiddleware)
     assert middleware[6].run_limit == 64
-    assert middleware[6].exit_behavior == "end"
+    assert middleware[6].exit_behavior == "continue"
     assert all(not isinstance(item, list) for item in middleware)
 
 

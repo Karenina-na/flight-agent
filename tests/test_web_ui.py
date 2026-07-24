@@ -274,6 +274,10 @@ def test_main_page_keeps_debug_sidebar_lightweight():
     assert "items.map((step, index) =>" in INDEX_HTML
     assert "return renderContextCompactionPanel(step, index)" in INDEX_HTML
     assert "context-compaction-panel" in INDEX_HTML
+    assert "context-compaction-title" in INDEX_HTML
+    assert "context-compaction-status" in INDEX_HTML
+    assert ".context-compaction-panel > summary::before" in INDEX_HTML
+    assert ".context-compaction-panel[open] > summary::before" in INDEX_HTML
     assert "context-compaction-body" in INDEX_HTML
     assert "上下文压缩" in INDEX_HTML
     assert "resize: vertical" in INDEX_HTML

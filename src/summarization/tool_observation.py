@@ -69,15 +69,52 @@ class CompactObservationLedger:
         if not self.observations:
             return "- 没有保留下来的历史工具结果。"
 
-        lines = [
-            _observation_model_line(index, observation)
-            for index, observation in enumerate(self.observations, start=1)
+        successful = [
+            observation
+            for observation in self.observations
+            if str(observation.get("status") or "").lower() == "success"
         ]
+        blocked = [
+            observation
+            for observation in self.observations
+            if str(observation.get("status") or "").lower()
+            in {"duplicate_blocked", "react_loop_stop_requested"}
+        ]
+        failed = [
+            observation
+            for observation in self.observations
+            if observation not in successful and observation not in blocked
+        ]
+        sections: list[str] = []
+        if successful:
+            sections.append(
+                "#### 成功事实\n"
+                + "\n".join(
+                    _observation_model_line(index, observation)
+                    for index, observation in enumerate(successful, start=1)
+                )
+            )
+        if blocked:
+            sections.append(
+                "#### 未产生新事实的调用\n"
+                + "\n".join(
+                    _observation_model_line(index, observation)
+                    for index, observation in enumerate(blocked, start=1)
+                )
+            )
+        if failed:
+            sections.append(
+                "#### 失败调用\n"
+                + "\n".join(
+                    _observation_model_line(index, observation)
+                    for index, observation in enumerate(failed, start=1)
+                )
+            )
         if self.dropped_observation_count:
-            lines.append(
+            sections.append(
                 f"- 另有 {self.dropped_observation_count} 条较早工具结果因上下文预算未保留。"
             )
-        return "\n".join(lines)
+        return "\n\n".join(sections)
 
     def with_semantic_summaries(
         self,
@@ -188,7 +225,7 @@ def build_tool_observations(messages: list[Any]) -> list[ToolObservation]:
                 tool_name=str(getattr(message, "name", "") or tool_call_names_by_id.get(tool_call_id) or "tool"),
                 tool_call_id=tool_call_id,
                 args=tool_call_args_by_id.get(tool_call_id) or _infer_args(result_value),
-                status=str(getattr(message, "status", "success") or "success"),
+                status=_observation_status(message, result_value),
                 result_shape=result_shape,
                 result_preview=result_preview,
                 result_stats=result_stats,
@@ -196,6 +233,16 @@ def build_tool_observations(messages: list[Any]) -> list[ToolObservation]:
             )
         )
     return observations
+
+
+def _observation_status(message: Any, result_value: Any) -> str:
+    if isinstance(result_value, dict):
+        payload_status = str(result_value.get("status") or "").strip().lower()
+        if payload_status in {"duplicate_blocked", "react_loop_stop_requested"}:
+            return payload_status
+        if result_value.get("stop_requested") is True:
+            return "react_loop_stop_requested"
+    return str(getattr(message, "status", "success") or "success")
 
 
 def compact_tool_observations(
@@ -384,6 +431,7 @@ def _model_status(status: str) -> str:
         "error": "失败",
         "failed": "失败",
         "duplicate_blocked": "重复调用已阻止",
+        "react_loop_stop_requested": "重复调用终止",
     }
     return labels.get(status.strip().lower(), status or "未知")
 

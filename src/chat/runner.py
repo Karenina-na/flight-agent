@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from langchain.messages import HumanMessage
+from langchain.messages import HumanMessage, ToolMessage
 
 from src.agent import agent as default_agent
 from src.chat.session import ChatSession
@@ -173,7 +173,20 @@ def _run_agent_turn_with_trace(
                     [turn_trace],
                     trace_events,
                 )[0].get("calls", [])
-                tool_fallback = fallback_answer_from_tool_results(current_calls)
+                checkpoint_messages = (
+                    invoke_output.get("messages", [])
+                    if isinstance(invoke_output, dict)
+                    else []
+                )
+                tool_fallback = fallback_answer_from_tool_results(
+                    current_calls,
+                    messages=checkpoint_messages,
+                    todos=(
+                        invoke_output.get("todos")
+                        if isinstance(invoke_output, dict)
+                        else None
+                    ),
+                )
                 tool_loop_stop_requested = _has_tool_loop_stop_requested(current_calls)
                 turn_trace["empty_visible_output"] = True
                 turn_trace["malformed_tool_call_text_seen"] = (
@@ -289,16 +302,124 @@ def _has_malformed_tool_call_text(message: object) -> bool:
     return any(marker in raw_text for marker in markers)
 
 
-def fallback_answer_from_tool_results(calls: list[dict[str, Any]]) -> str | None:
-    """Build a deterministic answer from successful current-turn tool results."""
-    for call in reversed(calls):
+def fallback_answer_from_tool_results(
+    calls: list[dict[str, Any]],
+    *,
+    messages: list[Any] | None = None,
+    todos: Any = None,
+) -> str | None:
+    """Build a deterministic answer from successful visible tool results."""
+    payloads: list[dict[str, Any]] = []
+    for call in calls:
         if call.get("type") != "tool" or call.get("event") != "tool_call_end":
             continue
-        if call.get("tool_name") == "search_airfare_quotes":
-            answer = _airfare_quotes_fallback(call)
-            if answer:
-                return answer
-    return None
+        if call.get("tool_name") != "search_airfare_quotes":
+            continue
+        payload = _airfare_quotes_payload(call)
+        if payload is not None:
+            payloads.append(payload)
+    target_dates = _target_dates_from_calls(calls)
+    if target_dates:
+        for message in messages or []:
+            payload = _airfare_payload_from_message(message)
+            departure_date = str((payload or {}).get("query", {}).get("departure_date") or "")
+            if payload is not None and departure_date in target_dates:
+                payloads.append(payload)
+    payloads = _unique_airfare_payloads(payloads)
+    if not payloads:
+        return None
+    if len(payloads) == 1:
+        answer = _airfare_payload_fallback(payloads[0])
+    else:
+        answer = _multiple_airfare_payloads_fallback(payloads)
+    todo_notice = _incomplete_todo_notice(todos)
+    return f"{answer}\n\n{todo_notice}" if todo_notice else answer
+
+
+def _target_dates_from_calls(calls: list[dict[str, Any]]) -> set[str]:
+    target_dates: set[str] = set()
+    for call in calls:
+        if call.get("type") != "tool" or call.get("event") != "tool_call_end":
+            continue
+        if call.get("tool_name") != "query_current_date":
+            continue
+        if str(call.get("status") or "success").lower() not in {"success", "completed"}:
+            continue
+        content = _tool_response_content(call)
+        if not isinstance(content, str):
+            continue
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and payload.get("target_date"):
+            target_dates.add(str(payload["target_date"]))
+    return target_dates
+
+
+def _airfare_payload_from_message(message: Any) -> dict[str, Any] | None:
+    if not isinstance(message, ToolMessage):
+        return None
+    if str(getattr(message, "name", "") or "") != "search_airfare_quotes":
+        return None
+    if str(getattr(message, "status", "success") or "success").lower() != "success":
+        return None
+    content = getattr(message, "content", "")
+    if not isinstance(content, str):
+        return None
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or _is_tool_guard_response(payload):
+        return None
+    return payload
+
+
+def _unique_airfare_payloads(
+    payloads: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for payload in payloads:
+        key = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        unique.setdefault(key, payload)
+    return sorted(
+        unique.values(),
+        key=lambda payload: (
+            str((payload.get("query") or {}).get("departure_date") or ""),
+            str(payload.get("captured_at") or ""),
+        ),
+    )
+
+
+def _incomplete_todo_notice(todos: Any) -> str:
+    if not isinstance(todos, list):
+        return ""
+    status_labels = {
+        "in_progress": "进行中",
+        "pending": "待处理",
+    }
+    remaining: list[str] = []
+    for todo in todos:
+        if not isinstance(todo, dict):
+            continue
+        status = str(todo.get("status") or "").strip()
+        content = str(todo.get("content") or "").strip()
+        if status in status_labels and content:
+            remaining.append(f"- {status_labels[status]}：{content}")
+    if not remaining:
+        return ""
+    return (
+        "**任务状态：任务未完整完成。** 当前仅展示已经取得的事实，"
+        "以下项目仍未完成：\n"
+        + "\n".join(remaining)
+    )
 
 
 def _visible_fallback_for_empty_output(
@@ -347,7 +468,9 @@ def _has_tool_loop_stop_requested(calls: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _airfare_quotes_fallback(call: dict[str, Any]) -> str | None:
+def _airfare_quotes_payload(call: dict[str, Any]) -> dict[str, Any] | None:
+    if str(call.get("status") or "success").lower() not in {"success", "completed"}:
+        return None
     raw_content = _tool_response_content(call)
     if not isinstance(raw_content, str):
         return None
@@ -358,6 +481,11 @@ def _airfare_quotes_fallback(call: dict[str, Any]) -> str | None:
 
     if _is_tool_guard_response(payload):
         return None
+
+    return payload
+
+
+def _airfare_payload_fallback(payload: dict[str, Any]) -> str:
 
     query = payload.get("query") or {}
     quotes = payload.get("quotes") or []
@@ -401,6 +529,66 @@ def _airfare_quotes_fallback(call: dict[str, Any]) -> str | None:
 
     if limitations:
         lines.extend(["", "**限制：**"])
+        lines.extend(f"- {item}" for item in limitations)
+    return "\n".join(lines)
+
+
+def _multiple_airfare_payloads_fallback(payloads: list[dict[str, Any]]) -> str:
+    lines = [
+        "模型最终回答生成失败，我先汇总当前会话中可见的成功报价结果。",
+        "",
+        f"**已完成报价查询：** 共 {len(payloads)} 组",
+    ]
+    route_keys: set[tuple[str, str]] = set()
+    limitations: list[str] = []
+    for payload in payloads:
+        query = payload.get("query") or {}
+        origin = _string_or_joined(query.get("origin")) or "出发地"
+        destination = _string_or_joined(query.get("destination")) or "目的地"
+        route_keys.add((origin, destination))
+        departure_date = str(query.get("departure_date") or "未知日期")
+        captured_at = str(payload.get("captured_at") or "未知")
+        sources = payload.get("sources_used") or []
+        quotes = [quote for quote in payload.get("quotes") or [] if isinstance(quote, dict)]
+        prices = [
+            quote.get("price")
+            for quote in quotes
+            if isinstance(quote.get("price"), int | float)
+        ]
+        price_range = (
+            f"最低 {min(prices)}，最高 {max(prices)}"
+            if prices
+            else "未返回可见价格"
+        )
+        lines.extend(
+            [
+                "",
+                f"### {departure_date} · {origin} → {destination}",
+                f"- 报价：{len(quotes)} 条，{price_range}",
+                f"- 查询时间：{captured_at}",
+                f"- 数据来源：{', '.join(str(source) for source in sources) if sources else '未返回来源'}",
+            ]
+        )
+        for quote in quotes[:3]:
+            lines.append(
+                "- 样本："
+                f"{quote.get('flight_number') or '未知航班'} "
+                f"{quote.get('price')} {quote.get('currency') or ''}"
+            )
+        for limitation in payload.get("limitations") or []:
+            text = str(limitation)
+            if text and text not in limitations:
+                limitations.append(text)
+
+    if len(route_keys) > 1:
+        lines.extend(
+            [
+                "",
+                "**口径提醒：** 各组查询使用的出发地或目的地参数不完全一致，价格只能作为样本参考。",
+            ]
+        )
+    if limitations:
+        lines.extend(["", "**共同限制：**"])
         lines.extend(f"- {item}" for item in limitations)
     return "\n".join(lines)
 

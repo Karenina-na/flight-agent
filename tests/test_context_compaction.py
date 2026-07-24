@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from langchain.messages import HumanMessage, ToolMessage
+from langchain.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.summarization.context_compaction import (
     DEFAULT_TODO_SNAPSHOT_MAX_CONTENT_CHARS,
@@ -71,6 +71,36 @@ def test_layer_one_replaces_empty_tool_outputs_with_short_markers():
     )
     assert '"tool_call_id":"call-empty"' in projection.messages[0].content
     assert projection.empty_tool_output_count == 1
+
+
+def test_layer_two_drops_visible_plan_text_from_historical_tool_call_messages():
+    projection = project_layer_one_messages(
+        [
+            AIMessage(
+                content="我先查询当前日期，然后分别查询三个日期。",
+                tool_calls=[
+                    {
+                        "id": "call-date",
+                        "name": "query_current_date",
+                        "args": {"days_offset": 0},
+                    }
+                ],
+            ),
+            ToolMessage(
+                content='{"target_date":"2026-07-13"}',
+                name="query_current_date",
+                tool_call_id="call-date",
+            ),
+            AIMessage(content="三个日期已经查询完成，下面汇总结果。"),
+        ]
+    )
+
+    assert [message.type for message in projection.messages] == ["tool", "ai"]
+    assert projection.messages[-1].content == "三个日期已经查询完成，下面汇总结果。"
+    assert all(
+        "我先查询当前日期" not in str(message.content)
+        for message in projection.messages
+    )
 
 
 def test_build_todo_snapshot_keeps_only_order_content_and_status():

@@ -58,6 +58,43 @@ def test_build_tool_observations_prefers_original_tool_call_args():
     assert observations[0].args == {"requested_slot": "from-tool-call"}
 
 
+def test_build_tool_observations_classifies_duplicate_guard_payload_as_blocked():
+    messages = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-duplicate",
+                    "name": "query_current_date",
+                    "args": {"days_offset": 0},
+                }
+            ],
+        ),
+        ToolMessage(
+            content=json.dumps(
+                {
+                    "status": "duplicate_blocked",
+                    "stop_requested": False,
+                    "duplicate_count": 1,
+                }
+            ),
+            name="query_current_date",
+            tool_call_id="call-duplicate",
+            status="success",
+        ),
+    ]
+
+    observations = build_tool_observations(messages)
+
+    assert observations[0].status == "duplicate_blocked"
+    model_text = compact_tool_observations(
+        observations,
+        budget_chars=2000,
+    ).to_model_text()
+    assert "未产生新事实的调用" in model_text
+    assert "状态：重复调用已阻止" in model_text
+
+
 def test_json_summaries_do_not_depend_on_business_fields():
     payload = {
         "records": [

@@ -11,7 +11,7 @@ from src.guardrails import (
 )
 from src.memory import build_checkpointer, build_memory_middleware, build_store
 from src.observability import configure_logging, build_observability_middleware
-from src.prompt import build_system_prompt
+from src.prompt import TODO_GUIDANCE_PROMPT, build_system_prompt
 from src.runtime import Context
 from src.skills import build_skill_middleware
 from src.summarization import build_summary_model
@@ -44,7 +44,7 @@ store = build_store(settings.memory.store)
 middleware = [
     build_skill_middleware(skills_root=Path("skills")),
     build_memory_middleware(),
-    TodoListMiddleware(),
+    TodoListMiddleware(system_prompt=TODO_GUIDANCE_PROMPT),
     build_agent_state_compaction_middleware(
         context_window_tokens=settings.llm.context_window_tokens,
         summary_model=summary_model,
@@ -53,7 +53,7 @@ middleware = [
     ),
     build_observability_middleware(redact=settings.observability.logging.redact),
     build_param_aware_duplicate_tool_call_guard(loop_stop_after=3),
-    ToolCallLimitMiddleware(run_limit=64, exit_behavior="end"),
+    ToolCallLimitMiddleware(run_limit=64, exit_behavior="continue"),
 ]
 
 agent = create_agent(

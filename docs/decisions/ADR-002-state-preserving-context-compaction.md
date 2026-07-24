@@ -1,5 +1,8 @@
 # ADR-002: Use State-Preserving Context Compaction for ReAct Turns
 
+> 当前实现的统一操作说明见 [`docs/context-compaction.md`](../context-compaction.md)。
+> 本 ADR 主要保留设计动机、取舍和演进背景。
+
 ## Status
 Accepted
 
@@ -164,7 +167,12 @@ paying the summary cost again when the input has not changed.
 
 Todo is protected state. It is not included in L3-L5 summary inputs. The final
 context ledger still receives the bounded todo snapshot so status and ordering
-survive.
+survive. Todo lifecycle guidance is injected as a system prompt by
+`TodoListMiddleware`: complex tasks create a todo before the first business
+tool call, update the complete list after each completed subtask, and mark all
+items completed before the final answer. The compacted ledger labels its todo
+snapshot as authoritative Agent state, so an older semantic summary cannot
+override newer task progress. Summary-model calls never invoke todo tools.
 
 L5 is the strict fallback. When it activates, the synthetic context ledger pair
 is still protocol-valid, but the deterministic history ledger body is no longer
@@ -334,6 +342,8 @@ final-answer fallback. It records:
 - `todo_snapshot_total_count`
 - `todo_snapshot_dropped_count`
 - `todo_snapshot_truncated_count`
+- `todo_status_counts`
+- `todo_all_completed`
 - `compaction_level`
 - `semantic_summary_count`
 - `semantic_summary_failed`

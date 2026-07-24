@@ -112,7 +112,13 @@ def _render_todo_snapshot(todo_snapshot: dict[str, Any] | None) -> str:
         lines.append(f"- [{status_labels.get(status, status)}] {content}")
     if not lines:
         return ""
-    return "### 任务进度\n" + "\n".join(lines) + "\n\n"
+    return (
+        "### 任务进度（受保护状态）\n"
+        + "\n".join(lines)
+        + "\n\n"
+        + "以上 Todo 来自 Agent state，是当前任务进度的权威任务状态，"
+        + "未参与历史语义摘要。\n\n"
+    )
 
 
 def _render_semantic_summaries(

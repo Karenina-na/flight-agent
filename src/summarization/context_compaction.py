@@ -320,7 +320,8 @@ def project_layer_one_messages(messages: list[Any]) -> LayerOneProjection:
         if message_tool_call_count or block_tool_call_count or removed_reasoning:
             historical_has_noise = True
         tool_calls_removed += message_tool_call_count + block_tool_call_count
-        if visible_text:
+        is_tool_call_step = bool(message_tool_call_count or block_tool_call_count)
+        if visible_text and not is_tool_call_step:
             projected_messages.append(AIMessage(content=visible_text))
 
     if not historical_has_noise:

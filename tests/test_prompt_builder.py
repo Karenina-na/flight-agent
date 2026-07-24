@@ -2,6 +2,7 @@ from src.prompt import (
     CORE_PROMPT,
     CONTEXT_LEDGER_TOOL_NAME,
     DOMAIN_PROMPT,
+    TODO_GUIDANCE_PROMPT,
     build_context_ledger_tool_call_args,
     build_context_ledger_tool_observation,
     build_memory_prompt_addendum,
@@ -77,6 +78,20 @@ def test_system_prompt_combines_layers():
     assert "query_current_date" in system_prompt
 
 
+def test_todo_guidance_prompt_defines_complex_task_lifecycle_without_domain_tools():
+    assert "调用第一个业务工具前" in TODO_GUIDANCE_PROMPT
+    assert "三个或更多" in TODO_GUIDANCE_PROMPT
+    assert "in_progress" in TODO_GUIDANCE_PROMPT
+    assert "pending" in TODO_GUIDANCE_PROMPT
+    assert "completed" in TODO_GUIDANCE_PROMPT
+    assert "每完成一个子任务" in TODO_GUIDANCE_PROMPT
+    assert "可验证的执行子任务" in TODO_GUIDANCE_PROMPT
+    assert "匹配的成功工具结果" in TODO_GUIDANCE_PROMPT
+    assert "最后一次 write_todos 调用之后" in TODO_GUIDANCE_PROMPT
+    assert "search_airfare_quotes" not in TODO_GUIDANCE_PROMPT
+    assert "query_current_date" not in TODO_GUIDANCE_PROMPT
+
+
 def test_context_budget_prompts_live_in_prompt_package():
     class FakeLedger:
         def to_model_text(self) -> str:
@@ -107,6 +122,8 @@ def test_context_budget_prompts_live_in_prompt_package():
     assert "必要时仍可调用可用工具" in prompt
     assert "已完成 generic_lookup" in prompt
     assert "任务进度" in prompt
+    assert "受保护状态" in prompt
+    assert "权威任务状态" in prompt
     assert "汇总报价" in prompt
     assert "进行中" in prompt
     assert "observation_count" not in prompt

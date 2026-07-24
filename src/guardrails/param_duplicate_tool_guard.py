@@ -5,14 +5,12 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain.agents.middleware.types import hook_config
 from langchain.messages import AIMessage, ToolMessage
-from langgraph.graph import END
-from langgraph.types import Command
-
 from src.observability import log_event
 from src.runtime import Context
 
@@ -25,7 +23,8 @@ class _ScopeState:
     """In-memory duplicate-call state for one request scope."""
 
     seen_keys: set[str] = field(default_factory=set)
-    duplicate_count: int = 0
+    duplicate_counts: dict[str, int] = field(default_factory=dict)
+    lock: Lock = field(default_factory=Lock, repr=False)
 
 
 class ParamAwareDuplicateToolCallGuard(AgentMiddleware):
@@ -54,55 +53,48 @@ class ParamAwareDuplicateToolCallGuard(AgentMiddleware):
         context = _runtime_context(runtime)
         scope = _context_scope(context)
         duplicate_state = self._state_by_scope.setdefault(scope, _ScopeState())
-        for tool_call in last_message.tool_calls:
-            key = _tool_call_payload_key(
-                str(tool_call.get("name") or "unknown_tool"),
-                tool_call.get("args"),
-            )
-            if key not in duplicate_state.seen_keys:
-                continue
-            next_duplicate_count = duplicate_state.duplicate_count + 1
-            if next_duplicate_count < self.loop_stop_after:
-                continue
+        with duplicate_state.lock:
+            for tool_call in last_message.tool_calls:
+                key = _tool_call_payload_key(
+                    str(tool_call.get("name") or "unknown_tool"),
+                    tool_call.get("args"),
+                )
+                if key not in duplicate_state.seen_keys:
+                    continue
+                next_duplicate_count = duplicate_state.duplicate_counts.get(key, 0) + 1
+                if next_duplicate_count < self.loop_stop_after:
+                    continue
 
-            duplicate_state.duplicate_count = next_duplicate_count
-            tool_name = str(tool_call.get("name") or "unknown_tool")
-            tool_call_id = str(tool_call.get("id") or "")
-            argument_keys = _argument_keys_from_args(tool_call.get("args"))
-            _log_duplicate_event(
-                context=context,
-                scope=scope,
-                key=key,
-                duplicate_count=duplicate_state.duplicate_count,
-                loop_stop_after=self.loop_stop_after,
-                tool_call_id=tool_call_id,
-                tool_name=tool_name,
-                argument_keys=argument_keys,
-                args=tool_call.get("args"),
-            )
-            payload = _duplicate_payload(
-                tool_name=tool_name,
-                argument_keys=argument_keys,
-                duplicate_count=duplicate_state.duplicate_count,
-                loop_stop_after=self.loop_stop_after,
-                stop_requested=True,
-            )
-            return {
-                "messages": [
-                    ToolMessage(
-                        content=json.dumps(
-                            payload,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                        ),
-                        name=tool_name,
-                        tool_call_id=tool_call_id,
-                        status="success",
-                    ),
-                    _loop_stop_ai_message(tool_name),
-                ],
-                "jump_to": "end",
-            }
+                duplicate_state.duplicate_counts[key] = next_duplicate_count
+                tool_name = str(tool_call.get("name") or "unknown_tool")
+                tool_call_id = str(tool_call.get("id") or "")
+                argument_keys = _argument_keys_from_args(tool_call.get("args"))
+                _log_duplicate_event(
+                    context=context,
+                    scope=scope,
+                    key=key,
+                    duplicate_count=next_duplicate_count,
+                    loop_stop_after=self.loop_stop_after,
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    argument_keys=argument_keys,
+                    args=tool_call.get("args"),
+                )
+                stop_messages = [
+                    _loop_stop_tool_message(
+                        pending_call,
+                        duplicate_count=next_duplicate_count,
+                        loop_stop_after=self.loop_stop_after,
+                    )
+                    for pending_call in last_message.tool_calls
+                ]
+                return {
+                    "messages": [
+                        *stop_messages,
+                        _loop_stop_ai_message(tool_name),
+                    ],
+                    "jump_to": "end",
+                }
         return None
 
     @hook_config(can_jump_to=["end"])
@@ -120,9 +112,9 @@ class ParamAwareDuplicateToolCallGuard(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Any],
     ) -> Any:
         """Run the first unique tool call and block exact duplicates."""
-        duplicate_state = self._record_or_detect_duplicate(request)
-        if duplicate_state:
-            return self._duplicate_response(request, duplicate_state)
+        duplicate_count = self._record_or_detect_duplicate(request)
+        if duplicate_count is not None:
+            return self._duplicate_response(request, duplicate_count)
         return handler(request)
 
     async def awrap_tool_call(
@@ -131,38 +123,40 @@ class ParamAwareDuplicateToolCallGuard(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Awaitable[Any]],
     ) -> Any:
         """Run the first unique async tool call and block exact duplicates."""
-        duplicate_state = self._record_or_detect_duplicate(request)
-        if duplicate_state:
-            return self._duplicate_response(request, duplicate_state)
+        duplicate_count = self._record_or_detect_duplicate(request)
+        if duplicate_count is not None:
+            return self._duplicate_response(request, duplicate_count)
         return await handler(request)
 
-    def _record_or_detect_duplicate(self, request: ToolCallRequest) -> _ScopeState | None:
+    def _record_or_detect_duplicate(self, request: ToolCallRequest) -> int | None:
         scope = _request_scope(request)
         key = _tool_call_key(request)
         state = self._state_by_scope.setdefault(scope, _ScopeState())
-        if key in state.seen_keys:
-            state.duplicate_count += 1
-            _log_duplicate_blocked(
-                request,
-                scope=scope,
-                key=key,
-                state=state,
-                loop_stop_after=self.loop_stop_after,
-            )
-            return state
-        state.seen_keys.add(key)
-        return None
+        with state.lock:
+            if key in state.seen_keys:
+                duplicate_count = state.duplicate_counts.get(key, 0) + 1
+                state.duplicate_counts[key] = duplicate_count
+                _log_duplicate_blocked(
+                    request,
+                    scope=scope,
+                    key=key,
+                    duplicate_count=duplicate_count,
+                    loop_stop_after=self.loop_stop_after,
+                )
+                return duplicate_count
+            state.seen_keys.add(key)
+            return None
 
     def _duplicate_response(
         self,
         request: ToolCallRequest,
-        state: _ScopeState,
-    ) -> ToolMessage | Command:
-        stop_requested = state.duplicate_count >= self.loop_stop_after
+        duplicate_count: int,
+    ) -> ToolMessage:
+        stop_requested = duplicate_count >= self.loop_stop_after
         payload = _duplicate_payload(
             tool_name=_tool_name(request),
             argument_keys=_argument_keys(request),
-            duplicate_count=state.duplicate_count,
+            duplicate_count=duplicate_count,
             loop_stop_after=self.loop_stop_after,
             stop_requested=stop_requested,
         )
@@ -170,21 +164,9 @@ class ParamAwareDuplicateToolCallGuard(AgentMiddleware):
             content=json.dumps(payload, ensure_ascii=False, sort_keys=True),
             name=_tool_name(request),
             tool_call_id=_tool_call_id(request) or "",
-            status="success",
+            status="error",
         )
-        if not stop_requested:
-            return tool_message
-
-        return Command(
-            update={
-                "messages": [
-                    tool_message,
-                    _loop_stop_ai_message(_tool_name(request)),
-                ],
-                "jump_to": "end",
-            },
-            goto=END,
-        )
+        return tool_message
 
 
 def build_param_aware_duplicate_tool_call_guard(
@@ -308,19 +290,41 @@ def _loop_stop_ai_message(tool_name: str) -> AIMessage:
     )
 
 
+def _loop_stop_tool_message(
+    tool_call: dict[str, Any],
+    *,
+    duplicate_count: int,
+    loop_stop_after: int,
+) -> ToolMessage:
+    tool_name = str(tool_call.get("name") or "unknown_tool")
+    payload = _duplicate_payload(
+        tool_name=tool_name,
+        argument_keys=_argument_keys_from_args(tool_call.get("args")),
+        duplicate_count=duplicate_count,
+        loop_stop_after=loop_stop_after,
+        stop_requested=True,
+    )
+    return ToolMessage(
+        content=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        name=tool_name,
+        tool_call_id=str(tool_call.get("id") or ""),
+        status="error",
+    )
+
+
 def _log_duplicate_blocked(
     request: ToolCallRequest,
     *,
     scope: str,
     key: str,
-    state: _ScopeState,
+    duplicate_count: int,
     loop_stop_after: int,
 ) -> None:
     _log_duplicate_event(
         context=_request_context(request),
         scope=scope,
         key=key,
-        duplicate_count=state.duplicate_count,
+        duplicate_count=duplicate_count,
         loop_stop_after=loop_stop_after,
         tool_call_id=_tool_call_id(request),
         tool_name=_tool_name(request),

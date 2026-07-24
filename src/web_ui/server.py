@@ -526,28 +526,51 @@ INDEX_HTML = r"""<!doctype html>
       max-height: 420px;
       resize: vertical;
       overflow: auto;
-      background: #fbfaff;
-      border: 1px solid #ddd6fe;
+      background: #fff;
+      border: 1px solid var(--line);
       border-left: 3px solid #7c3aed;
-      border-radius: 8px;
-      padding: 10px;
+      border-radius: 6px;
     }
     .context-compaction-panel > summary {
       cursor: pointer;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: auto minmax(0, 1fr) auto;
       gap: 8px;
       align-items: center;
+      padding: 8px 10px;
       list-style: none;
-      color: #5b21b6;
-      font-size: 12px;
-      font-weight: 700;
     }
     .context-compaction-panel > summary::-webkit-details-marker { display: none; }
+    .context-compaction-panel > summary::before {
+      content: "›";
+      color: var(--muted);
+      transition: transform 0.15s ease;
+    }
+    .context-compaction-panel[open] > summary::before {
+      transform: rotate(90deg);
+    }
+    .context-compaction-title {
+      min-width: 0;
+      color: #5b21b6;
+      font-size: 12px;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .context-compaction-status {
+      font-size: 11px;
+      color: #5b21b6;
+      border: 1px solid #ddd6fe;
+      border-radius: 999px;
+      padding: 1px 7px;
+      background: #fbfaff;
+      white-space: nowrap;
+    }
     .context-compaction-body {
       display: grid;
       gap: 10px;
-      margin-top: 10px;
+      padding: 0 10px 10px 28px;
     }
     .execution-title {
       font-size: 12px;
@@ -1146,8 +1169,8 @@ INDEX_HTML = r"""<!doctype html>
       return `
         <details class="context-compaction-panel" data-kind="${escapeHtml(step.kind || "context_compaction")}" open>
           <summary>
-            <span>${escapeHtml(index + 1)}. 上下文压缩：${escapeHtml(title)}</span>
-            <span>${escapeHtml(status)} · ${formatNumber(childSteps.length)} 个阶段</span>
+            <span class="context-compaction-title">${escapeHtml(index + 1)}. 上下文压缩：${escapeHtml(title)}</span>
+            <span class="context-compaction-status">${escapeHtml(status)} · ${formatNumber(childSteps.length)} 个阶段</span>
           </summary>
           <div class="context-compaction-body">
             ${summary ? `<p class="execution-step-summary">${escapeHtml(summary)}</p>` : ""}

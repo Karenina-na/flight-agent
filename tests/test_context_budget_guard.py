@@ -490,6 +490,8 @@ def test_context_budget_guard_logs_full_synthetic_observation_preview_with_todo(
     assert fields["todo_snapshot_item_count"] == 1
     assert fields["todo_snapshot_dropped_count"] == 0
     assert fields["todo_snapshot_truncated_count"] == 0
+    assert fields["todo_status_counts"] == {"in_progress": 1}
+    assert fields["todo_all_completed"] is False
 
 
 def test_context_budget_guard_records_l4_semantic_compaction_fields():

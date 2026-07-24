@@ -172,6 +172,8 @@ def _log_context_budget_compacted(
 ) -> None:
     ledger = compaction_result.ledger
     projection = compaction_result.layer_one_projection
+    todo_items = (compaction_result.todo_snapshot or {}).get("items", [])
+    todo_status_counts = _todo_status_counts(todo_items)
     compacted_state_text = build_context_ledger_tool_observation(
         original_user_message=_current_user_goal(request),
         ledger=ledger,
@@ -209,15 +211,18 @@ def _log_context_budget_compacted(
         original_message_count=len(request.messages),
         compacted_message_count=len(compaction_result.request.messages),
         raw_message_count=compaction_result.raw_message_count,
-        todo_snapshot_item_count=len(
-            (compaction_result.todo_snapshot or {}).get("items", [])
-        ),
+        todo_snapshot_item_count=len(todo_items),
         todo_snapshot_total_count=(compaction_result.todo_snapshot or {}).get("total_count", 0),
         todo_snapshot_dropped_count=(compaction_result.todo_snapshot or {}).get(
             "dropped_count", 0
         ),
         todo_snapshot_truncated_count=(compaction_result.todo_snapshot or {}).get(
             "truncated_count", 0
+        ),
+        todo_status_counts=todo_status_counts,
+        todo_all_completed=(
+            bool(todo_items)
+            and todo_status_counts.get("completed", 0) == len(todo_items)
         ),
         original_tool_count=len(request.tools),
         compacted_tool_count=len(request.tools),
@@ -254,6 +259,18 @@ def _log_context_budget_compacted(
             _current_user_goal(request).encode("utf-8")
         ).hexdigest(),
     )
+
+
+def _todo_status_counts(items: Any) -> dict[str, int]:
+    if not isinstance(items, list):
+        return {}
+    counts: dict[str, int] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "unknown").strip() or "unknown"
+        counts[status] = counts.get(status, 0) + 1
+    return counts
 
 
 def _request_context(request: ModelRequest) -> Context | None:

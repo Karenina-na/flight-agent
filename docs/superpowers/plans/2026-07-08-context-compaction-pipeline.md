@@ -1,5 +1,8 @@
 # Context Compaction Pipeline Plan
 
+> 本文是历史实施计划。当前运行行为以
+> [`docs/context-compaction.md`](../../context-compaction.md) 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace always-on ReAct hygiene cleanup with an on-demand, layered context compaction pipeline that activates only when the model request approaches or exceeds the context budget.
@@ -279,6 +282,8 @@ Current implementation:
 
 - Do not rewrite checkpoint/session history.
 - Do not compress under-budget requests.
-- Do not ask the model to call todo tools during compaction.
+- Do not let L3-L5 summary-model calls invoke todo tools. The business Agent
+  still follows the system-level Todo lifecycle after receiving a protected
+  snapshot in its compacted request.
 - Do not hide raw trace/debug data.
 - Do not make reasoning summaries a normal always-on behavior.
